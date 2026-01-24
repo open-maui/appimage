@@ -143,7 +143,24 @@ public class AppImageBuilder
         }
 
         // Find the main executable
-        var execName = options.ExecutableName ?? options.AppName;
+        var execName = options.ExecutableName;
+
+        // Auto-detect executable if not specified
+        if (string.IsNullOrEmpty(execName))
+        {
+            execName = AutoDetectExecutable(options.InputDirectory.FullName, options.AppName);
+            if (execName != null)
+            {
+                Console.WriteLine($"  Auto-detected executable: {execName}");
+            }
+        }
+
+        // Fallback to app name variations
+        if (string.IsNullOrEmpty(execName))
+        {
+            execName = options.AppName;
+        }
+
         var mainExec = Path.Combine(options.InputDirectory.FullName, execName);
         if (!File.Exists(mainExec))
         {
@@ -156,8 +173,14 @@ public class AppImageBuilder
                 Path.Combine(options.InputDirectory.FullName, execName.Replace(" ", "") + ".dll")
             };
 
-            mainExec = candidates.FirstOrDefault(File.Exists) ?? "";
-            if (string.IsNullOrEmpty(mainExec))
+            var found = candidates.FirstOrDefault(File.Exists);
+            if (found != null)
+            {
+                // Update execName to the actual name (without spaces)
+                execName = Path.GetFileNameWithoutExtension(found);
+                mainExec = found;
+            }
+            else
             {
                 // List available executables
                 var dlls = Directory.GetFiles(options.InputDirectory.FullName, "*.dll")
@@ -201,7 +224,7 @@ public class AppImageBuilder
             // Create AppRun script
             Console.WriteLine("  Creating AppRun script...");
             var appRunPath = Path.Combine(appDir, "AppRun");
-            await CreateAppRunScript(appRunPath, options);
+            await CreateAppRunScript(appRunPath, options, execName);
 
             // Create .desktop file
             Console.WriteLine("  Creating .desktop file...");
@@ -240,9 +263,8 @@ public class AppImageBuilder
         }
     }
 
-    private async Task CreateAppRunScript(string path, PackageOptions options)
+    private async Task CreateAppRunScript(string path, PackageOptions options, string execName)
     {
-        var execName = options.ExecutableName ?? options.AppName;
         var script = $@"#!/bin/bash
 # AppRun script for OpenMaui applications
 
@@ -263,7 +285,8 @@ export XDG_DATA_DIRS=""$HERE/usr/share:${{XDG_DATA_DIRS:-/usr/local/share:/usr/s
 INSTALLED_MARKER=""$HOME/.local/share/openmaui-installed""
 BIN_DIR=""$HOME/.local/bin""
 APPS_DIR=""$HOME/.local/share/applications""
-ICONS_DIR=""$HOME/.local/share/icons/hicolor/256x256/apps""
+ICONS_DIR_SCALABLE=""$HOME/.local/share/icons/hicolor/scalable/apps""
+ICONS_DIR_256=""$HOME/.local/share/icons/hicolor/256x256/apps""
 
 # Handle command line flags
 if [ ""$1"" = ""--install"" ]; then
@@ -275,8 +298,12 @@ elif [ ""$1"" = ""--uninstall"" ]; then
     SANITIZED_NAME=$(echo ""$APPIMAGE_NAME"" | tr ' ' '_')
     rm -f ""$BIN_DIR/$APPIMAGE_BASENAME""
     rm -f ""$APPS_DIR/${{SANITIZED_NAME}}.desktop""
+    rm -f ""$ICONS_DIR_SCALABLE/${{SANITIZED_NAME}}.svg""
+    rm -f ""$ICONS_DIR_256/${{SANITIZED_NAME}}.png""
+    rm -f ""$ICONS_DIR_256/${{SANITIZED_NAME}}.ico""
     rm -f ""$INSTALLED_MARKER/$APPIMAGE_BASENAME""
     command -v update-desktop-database &> /dev/null && update-desktop-database ""$APPS_DIR"" 2>/dev/null
+    command -v gtk-update-icon-cache &> /dev/null && gtk-update-icon-cache -f -t ""$HOME/.local/share/icons/hicolor"" 2>/dev/null
     if command -v zenity &> /dev/null; then
         zenity --info --title=""Uninstall Complete"" --text=""$APPIMAGE_NAME has been removed."" --width=300 2>/dev/null
     else
@@ -298,19 +325,20 @@ do_install() {{
     APPIMAGE_BASENAME=$(basename ""$APPIMAGE"")
     SANITIZED=$(echo ""$APPIMAGE_NAME"" | tr ' ' '_')
 
-    mkdir -p ""$BIN_DIR"" ""$APPS_DIR"" ""$ICONS_DIR"" ""$INSTALLED_MARKER""
+    mkdir -p ""$BIN_DIR"" ""$APPS_DIR"" ""$ICONS_DIR_SCALABLE"" ""$ICONS_DIR_256"" ""$INSTALLED_MARKER""
 
     # Copy AppImage
     cp ""$APPIMAGE"" ""$BIN_DIR/$APPIMAGE_BASENAME""
     chmod +x ""$BIN_DIR/$APPIMAGE_BASENAME""
 
-    # Copy icon if available
-    for ext in svg png ico; do
-        if [ -f ""$HERE/${{SANITIZED}}.${{ext}}"" ]; then
-            cp ""$HERE/${{SANITIZED}}.${{ext}}"" ""$ICONS_DIR/${{SANITIZED}}.${{ext}}""
-            break
-        fi
-    done
+    # Copy icon if available (SVG to scalable, PNG/ICO to 256x256)
+    if [ -f ""$HERE/${{SANITIZED}}.svg"" ]; then
+        cp ""$HERE/${{SANITIZED}}.svg"" ""$ICONS_DIR_SCALABLE/${{SANITIZED}}.svg""
+    elif [ -f ""$HERE/${{SANITIZED}}.png"" ]; then
+        cp ""$HERE/${{SANITIZED}}.png"" ""$ICONS_DIR_256/${{SANITIZED}}.png""
+    elif [ -f ""$HERE/${{SANITIZED}}.ico"" ]; then
+        cp ""$HERE/${{SANITIZED}}.ico"" ""$ICONS_DIR_256/${{SANITIZED}}.ico""
+    fi
 
     # Create .desktop file
     cat > ""$APPS_DIR/${{SANITIZED}}.desktop"" << DESKTOP
@@ -328,8 +356,9 @@ DESKTOP
     # Mark as installed
     echo ""$(date -Iseconds)"" > ""$INSTALLED_MARKER/$APPIMAGE_BASENAME""
 
-    # Update desktop database
+    # Update desktop database and icon cache
     command -v update-desktop-database &> /dev/null && update-desktop-database ""$APPS_DIR"" 2>/dev/null
+    command -v gtk-update-icon-cache &> /dev/null && gtk-update-icon-cache -f -t ""$HOME/.local/share/icons/hicolor"" 2>/dev/null
 
     return 0
 }}
@@ -349,33 +378,47 @@ if [ -n ""$APPIMAGE"" ]; then
             ICON_OPT=""""
             [ -n ""$ICON_PATH"" ] && ICON_OPT=""--window-icon=$ICON_PATH""
 
-            CHOICE=$(zenity --question --title=""$APPIMAGE_NAME"" \
+            # Run zenity and capture exit code properly
+            zenity --question --title=""$APPIMAGE_NAME"" \
                 --text=""<b>$APPIMAGE_NAME</b>\nVersion $APPIMAGE_VERSION\n\n$APPIMAGE_COMMENT\n\nWould you like to install this application?"" \
-                --ok-label=""Install"" --cancel-label=""Run Without Installing"" \
-                --extra-button=""Cancel"" \
-                --width=350 $ICON_OPT 2>/dev/null; echo $?)
+                --ok-label=""Install"" --cancel-label=""Run Only"" \
+                --width=350 $ICON_OPT 2>/dev/null
+            ZENITY_EXIT=$?
 
-            case ""$CHOICE"" in
-                0)  # Install clicked
-                    do_install
-                    if [ $? -eq 0 ]; then
-                        zenity --info --title=""Installation Complete"" \
-                            --text=""$APPIMAGE_NAME has been installed.\n\nYou can find it in your application menu."" \
-                            --width=300 $ICON_OPT 2>/dev/null
-                    fi
-                    ;;
-                1)  # Run Without Installing
-                    ;;
-                *)  # Cancel or closed
-                    exit 0
-                    ;;
-            esac
+            if [ $ZENITY_EXIT -eq 0 ]; then
+                # Install clicked
+                do_install
+                if [ $? -eq 0 ]; then
+                    zenity --info --title=""Installation Complete"" \
+                        --text=""$APPIMAGE_NAME has been installed.\n\nYou can find it in your application menu."" \
+                        --width=300 $ICON_OPT 2>/dev/null
+                fi
+            elif [ $ZENITY_EXIT -eq 1 ]; then
+                # Run Only clicked - continue to run the app
+                :
+            else
+                # Dialog closed or error
+                exit 0
+            fi
         fi
     fi
 fi
 
 cd ""$HERE/usr/bin""
-exec dotnet ""$EXEC_NAME.dll"" ""$@""
+
+# Check if this is a self-contained app (native executable exists)
+if [ -x ""$HERE/usr/bin/$EXEC_NAME"" ]; then
+    exec ""$HERE/usr/bin/$EXEC_NAME"" ""$@""
+else
+    # Framework-dependent - find and use dotnet
+    DOTNET_CMD=""dotnet""
+    if ! command -v dotnet &> /dev/null; then
+        for d in /usr/share/dotnet /usr/lib/dotnet /opt/dotnet ""$HOME/.dotnet""; do
+            [ -x ""$d/dotnet"" ] && DOTNET_CMD=""$d/dotnet"" && break
+        done
+    fi
+    exec ""$DOTNET_CMD"" ""$EXEC_NAME.dll"" ""$@""
+fi
 ";
         await File.WriteAllTextAsync(path, script);
         await RunCommandAsync("chmod", $"+x \"{path}\"");
@@ -407,7 +450,7 @@ X-AppImage-Version={options.Version}
             var destIcon = Path.Combine(appDir, $"{iconName}{ext}");
             File.Copy(options.IconPath.FullName, destIcon);
 
-            // Also copy to standard locations
+            // Also copy to standard locations for desktop integration
             var iconDirs = new[]
             {
                 Path.Combine(appDir, "usr", "share", "icons", "hicolor", "256x256", "apps"),
@@ -421,6 +464,12 @@ X-AppImage-Version={options.Version}
                 if (!File.Exists(iconPath))
                     File.Copy(options.IconPath.FullName, iconPath);
             }
+
+            // Also copy to usr/bin as appicon.svg/png for runtime window icon
+            // The app looks for appicon.svg or appicon.png in AppContext.BaseDirectory
+            var runtimeIconPath = Path.Combine(appDir, "usr", "bin", $"appicon{ext}");
+            if (!File.Exists(runtimeIconPath))
+                File.Copy(options.IconPath.FullName, runtimeIconPath);
         }
         else
         {
@@ -439,6 +488,10 @@ X-AppImage-Version={options.Version}
             var svgDir = Path.Combine(appDir, "usr", "share", "icons", "hicolor", "scalable", "apps");
             Directory.CreateDirectory(svgDir);
             await File.WriteAllTextAsync(Path.Combine(svgDir, $"{iconName}.svg"), defaultIcon);
+
+            // Also create in usr/bin as appicon.svg for runtime window icon
+            var runtimeIconPath = Path.Combine(appDir, "usr", "bin", "appicon.svg");
+            await File.WriteAllTextAsync(runtimeIconPath, defaultIcon);
         }
     }
 
@@ -482,6 +535,71 @@ X-AppImage-Version={options.Version}
         }
 
         return false;
+    }
+
+    private string? AutoDetectExecutable(string inputDir, string appName)
+    {
+        // Strategy 1: Look for a native executable (ELF file without extension)
+        // These are created when publishing with --self-contained
+        var files = Directory.GetFiles(inputDir);
+        foreach (var file in files)
+        {
+            var fileName = Path.GetFileName(file);
+            // Skip files with extensions (DLLs, configs, etc.)
+            if (fileName.Contains('.')) continue;
+            // Skip common non-app files
+            if (fileName == "createdump") continue;
+
+            // Check if it's an executable (has execute permission or is ELF)
+            try
+            {
+                var firstBytes = new byte[4];
+                using (var fs = File.OpenRead(file))
+                {
+                    fs.Read(firstBytes, 0, 4);
+                }
+                // ELF magic number: 0x7F 'E' 'L' 'F'
+                if (firstBytes[0] == 0x7F && firstBytes[1] == 'E' && firstBytes[2] == 'L' && firstBytes[3] == 'F')
+                {
+                    return fileName;
+                }
+            }
+            catch { }
+        }
+
+        // Strategy 2: Look for a .dll that matches the app name pattern
+        var sanitizedName = appName.Replace(" ", "");
+        var dllCandidates = new[]
+        {
+            $"{sanitizedName}.dll",
+            $"{appName}.dll",
+        };
+
+        foreach (var dll in dllCandidates)
+        {
+            if (File.Exists(Path.Combine(inputDir, dll)))
+            {
+                return Path.GetFileNameWithoutExtension(dll);
+            }
+        }
+
+        // Strategy 3: Look for any .dll with a matching .runtimeconfig.json (indicates main app)
+        var runtimeConfigs = Directory.GetFiles(inputDir, "*.runtimeconfig.json");
+        foreach (var config in runtimeConfigs)
+        {
+            var baseName = Path.GetFileNameWithoutExtension(config).Replace(".runtimeconfig", "");
+            var dllPath = Path.Combine(inputDir, baseName + ".dll");
+            if (File.Exists(dllPath))
+            {
+                // Skip Microsoft/System DLLs
+                if (!baseName.StartsWith("Microsoft.") && !baseName.StartsWith("System."))
+                {
+                    return baseName;
+                }
+            }
+        }
+
+        return null;
     }
 
     private string? FindIcon(string inputDir, string execName)

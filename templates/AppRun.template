@@ -58,7 +58,7 @@ if [ -n "$APPIMAGE" ]; then
     # Check if already installed
     if [ ! -f "$INSTALLED_MARKER/$APPIMAGE_BASENAME" ] || [ "$SHOW_INSTALLER" = "1" ]; then
         # First run - show installer dialog
-        if [ -f "$HERE/usr/bin/OpenMaui.AppImage.Installer.dll" ]; then
+        if [ -f "$HERE/usr/bin/OpenMaui.AppImage.Installer.dll" ] || [ -x "$HERE/usr/bin/OpenMaui.AppImage.Installer" ]; then
             # Find icon
             ICON_PATH=""
             for ext in svg png ico; do
@@ -74,13 +74,26 @@ if [ -n "$APPIMAGE" ]; then
             done
 
             cd "$HERE/usr/bin"
-            RESULT=$(dotnet OpenMaui.AppImage.Installer.dll \
-                --name "$APPIMAGE_NAME" \
-                --appimage "$APPIMAGE" \
-                --comment "$APPIMAGE_COMMENT" \
-                --category "$APPIMAGE_CATEGORY" \
-                --version "$APPIMAGE_VERSION" \
-                ${ICON_PATH:+--icon "$ICON_PATH"}; echo $?)
+            # Check if self-contained installer exists
+            if [ -x "$HERE/usr/bin/OpenMaui.AppImage.Installer" ]; then
+                "$HERE/usr/bin/OpenMaui.AppImage.Installer" \
+                    --name "$APPIMAGE_NAME" \
+                    --appimage "$APPIMAGE" \
+                    --comment "$APPIMAGE_COMMENT" \
+                    --category "$APPIMAGE_CATEGORY" \
+                    --version "$APPIMAGE_VERSION" \
+                    ${ICON_PATH:+--icon "$ICON_PATH"}
+                RESULT=$?
+            else
+                dotnet OpenMaui.AppImage.Installer.dll \
+                    --name "$APPIMAGE_NAME" \
+                    --appimage "$APPIMAGE" \
+                    --comment "$APPIMAGE_COMMENT" \
+                    --category "$APPIMAGE_CATEGORY" \
+                    --version "$APPIMAGE_VERSION" \
+                    ${ICON_PATH:+--icon "$ICON_PATH"}
+                RESULT=$?
+            fi
 
             # Check result: 0=run, 1=cancel, 2=installed
             if [ "$RESULT" = "1" ]; then
@@ -92,4 +105,11 @@ fi
 
 # Run the application
 cd "$HERE/usr/bin"
-exec dotnet "$EXEC_NAME.dll" "$@"
+
+# Check if this is a self-contained app (native executable exists)
+if [ -x "$HERE/usr/bin/$EXEC_NAME" ]; then
+    exec "$HERE/usr/bin/$EXEC_NAME" "$@"
+else
+    # Framework-dependent - use dotnet
+    exec dotnet "$EXEC_NAME.dll" "$@"
+fi
