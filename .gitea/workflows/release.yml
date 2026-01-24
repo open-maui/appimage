@@ -1,0 +1,64 @@
+# OpenMaui AppImage Builder Release
+name: Release
+
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v*'
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  release:
+    name: Build and Publish
+    runs-on: linux-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Get version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Pack as .NET tool
+        run: dotnet pack src/OpenMaui.AppImage/OpenMaui.AppImage.csproj --configuration Release --no-build -o ./nupkg -p:PackageVersion=${{ steps.version.outputs.VERSION }}
+
+      - name: Upload NuGet package
+        uses: actions/upload-artifact@v3
+        with:
+          name: dotnet-tool
+          path: ./nupkg/*.nupkg
+
+      - name: Publish to Gitea Packages
+        run: |
+          for pkg in ./nupkg/*.nupkg; do
+            dotnet nuget push "$pkg" \
+              --api-key ${{ secrets.GITHUB_TOKEN }} \
+              --source https://git.marketally.com/api/packages/${{ github.repository_owner }}/nuget/index.json \
+              --skip-duplicate
+          done
+
+      - name: Publish to NuGet.org
+        if: ${{ secrets.NUGET_API_KEY != '' }}
+        run: |
+          for pkg in ./nupkg/*.nupkg; do
+            dotnet nuget push "$pkg" \
+              --api-key ${{ secrets.NUGET_API_KEY }} \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate
+          done
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
