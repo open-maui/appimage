@@ -1,0 +1,95 @@
+#!/bin/bash
+# AppRun script for OpenMaui applications
+# This script is the entry point for the AppImage
+
+SELF=$(readlink -f "$0")
+HERE=${SELF%/*}
+
+# App metadata (filled in by builder)
+export APPIMAGE_NAME="{{APP_NAME}}"
+export APPIMAGE_COMMENT="{{COMMENT}}"
+export APPIMAGE_CATEGORY="{{CATEGORY}}"
+export APPIMAGE_VERSION="{{VERSION}}"
+EXEC_NAME="{{EXEC_NAME}}"
+
+export PATH="$HERE/usr/bin:$PATH"
+export LD_LIBRARY_PATH="$HERE/usr/bin:$LD_LIBRARY_PATH"
+export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+# Configuration
+INSTALLED_MARKER="$HOME/.local/share/openmaui-installed"
+
+# Handle command line flags
+if [ "$1" = "--install" ]; then
+    # Force show installer
+    SHOW_INSTALLER=1
+    shift
+elif [ "$1" = "--uninstall" ]; then
+    # Uninstall
+    echo "Uninstalling $APPIMAGE_NAME..."
+    APPIMAGE_BASENAME=$(basename "$APPIMAGE")
+    SANITIZED_NAME=$(echo "$APPIMAGE_NAME" | tr ' ' '_')
+
+    rm -f "$HOME/.local/bin/$APPIMAGE_BASENAME"
+    rm -f "$HOME/.local/share/applications/${SANITIZED_NAME}.desktop"
+    rm -f "$INSTALLED_MARKER/$APPIMAGE_BASENAME"
+
+    if command -v update-desktop-database &> /dev/null; then
+        update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+    fi
+
+    echo "Uninstallation complete!"
+    exit 0
+elif [ "$1" = "--help" ]; then
+    echo "Usage: $(basename "$APPIMAGE") [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --install     Show the installation dialog"
+    echo "  --uninstall   Remove the application"
+    echo "  --help        Show this help message"
+    echo ""
+    exit 0
+fi
+
+# Check if running from AppImage and if first run
+if [ -n "$APPIMAGE" ]; then
+    APPIMAGE_BASENAME=$(basename "$APPIMAGE")
+
+    # Check if already installed
+    if [ ! -f "$INSTALLED_MARKER/$APPIMAGE_BASENAME" ] || [ "$SHOW_INSTALLER" = "1" ]; then
+        # First run - show installer dialog
+        if [ -f "$HERE/usr/bin/OpenMaui.AppImage.Installer.dll" ]; then
+            # Find icon
+            ICON_PATH=""
+            for ext in svg png ico; do
+                if [ -f "$HERE/${APPIMAGE_NAME}.${ext}" ]; then
+                    ICON_PATH="$HERE/${APPIMAGE_NAME}.${ext}"
+                    break
+                fi
+                SANITIZED=$(echo "$APPIMAGE_NAME" | tr ' ' '_')
+                if [ -f "$HERE/${SANITIZED}.${ext}" ]; then
+                    ICON_PATH="$HERE/${SANITIZED}.${ext}"
+                    break
+                fi
+            done
+
+            cd "$HERE/usr/bin"
+            RESULT=$(dotnet OpenMaui.AppImage.Installer.dll \
+                --name "$APPIMAGE_NAME" \
+                --appimage "$APPIMAGE" \
+                --comment "$APPIMAGE_COMMENT" \
+                --category "$APPIMAGE_CATEGORY" \
+                --version "$APPIMAGE_VERSION" \
+                ${ICON_PATH:+--icon "$ICON_PATH"}; echo $?)
+
+            # Check result: 0=run, 1=cancel, 2=installed
+            if [ "$RESULT" = "1" ]; then
+                exit 0
+            fi
+        fi
+    fi
+fi
+
+# Run the application
+cd "$HERE/usr/bin"
+exec dotnet "$EXEC_NAME.dll" "$@"

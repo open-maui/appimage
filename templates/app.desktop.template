@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name={{APP_NAME}}
+Comment={{COMMENT}}
+Exec={{EXEC_NAME}}
+Icon={{ICON_NAME}}
+Categories={{CATEGORY}};
+Terminal=false
+X-AppImage-Version={{VERSION}}
+StartupWMClass={{WM_CLASS}}

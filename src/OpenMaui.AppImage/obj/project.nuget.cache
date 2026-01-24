@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "s/Fcy88GmSs=",
+  "success": true,
+  "projectFilePath": "/home/friedel/Documents/Gitea/appimage/src/OpenMaui.AppImage/OpenMaui.AppImage.csproj",
+  "expectedPackageFiles": [
+    "/home/friedel/.nuget/packages/system.commandline/2.0.0-beta4.22272.1/system.commandline.2.0.0-beta4.22272.1.nupkg.sha512"
+  ],
+  "logs": []
+}
