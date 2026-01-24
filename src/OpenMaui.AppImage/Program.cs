@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text;
+using System.Xml.Linq;
 
 namespace OpenMaui.AppImage;
 
@@ -88,7 +89,7 @@ class Program
     }
 }
 
-public class AppImageOptions
+public record AppImageOptions
 {
     public required DirectoryInfo InputDirectory { get; init; }
     public required FileInfo OutputFile { get; init; }
@@ -142,6 +143,17 @@ public class AppImageBuilder
                 Console.Error.WriteLine($"Available DLLs: {string.Join(", ", dlls)}");
                 Console.Error.WriteLine("Use --executable to specify the correct name.");
                 return false;
+            }
+        }
+
+        // Auto-detect icon if not specified
+        if (options.IconPath == null || !options.IconPath.Exists)
+        {
+            var detectedIcon = FindIcon(options.InputDirectory.FullName, execName);
+            if (detectedIcon != null)
+            {
+                options = options with { IconPath = new FileInfo(detectedIcon) };
+                Console.WriteLine($"  Auto-detected icon: {Path.GetFileName(detectedIcon)}");
             }
         }
 
@@ -301,11 +313,21 @@ if [ -n ""$APPIMAGE"" ]; then
     APPIMAGE_BASENAME=$(basename ""$APPIMAGE"")
     if [ ! -f ""$INSTALLED_MARKER/$APPIMAGE_BASENAME"" ] || [ ""$SHOW_INSTALLER"" = ""1"" ]; then
         if command -v zenity &> /dev/null; then
+            # Find app icon
+            SANITIZED=$(echo ""$APPIMAGE_NAME"" | tr ' ' '_')
+            ICON_PATH=""""
+            for ext in svg png ico; do
+                [ -f ""$HERE/${{SANITIZED}}.${{ext}}"" ] && ICON_PATH=""$HERE/${{SANITIZED}}.${{ext}}"" && break
+            done
+
+            ICON_OPT=""""
+            [ -n ""$ICON_PATH"" ] && ICON_OPT=""--window-icon=$ICON_PATH""
+
             CHOICE=$(zenity --question --title=""$APPIMAGE_NAME"" \
                 --text=""<b>$APPIMAGE_NAME</b>\nVersion $APPIMAGE_VERSION\n\n$APPIMAGE_COMMENT\n\nWould you like to install this application?"" \
                 --ok-label=""Install"" --cancel-label=""Run Without Installing"" \
                 --extra-button=""Cancel"" \
-                --width=350 --icon-name=application-x-executable 2>/dev/null; echo $?)
+                --width=350 $ICON_OPT 2>/dev/null; echo $?)
 
             case ""$CHOICE"" in
                 0)  # Install clicked
@@ -313,7 +335,7 @@ if [ -n ""$APPIMAGE"" ]; then
                     if [ $? -eq 0 ]; then
                         zenity --info --title=""Installation Complete"" \
                             --text=""$APPIMAGE_NAME has been installed.\n\nYou can find it in your application menu."" \
-                            --width=300 2>/dev/null
+                            --width=300 $ICON_OPT 2>/dev/null
                     fi
                     ;;
                 1)  # Run Without Installing
@@ -434,6 +456,211 @@ X-AppImage-Version={options.Version}
         }
 
         return false;
+    }
+
+    private string? FindIcon(string inputDir, string execName)
+    {
+        // First, try to find and parse the .csproj to get MauiIcon
+        var csprojIcon = TryGetIconFromCsproj(inputDir, execName);
+        if (csprojIcon != null)
+            return csprojIcon;
+
+        // Fallback to searching for icon files directly
+        var extensions = new[] { ".svg", ".png", ".ico" };
+
+        var searchPatterns = new[]
+        {
+            "appicon_combined",                 // Combined icon for Linux desktop
+            "appicon",                          // MAUI standard: appicon.svg
+            "AppIcon",                          // AppIcon.svg
+            execName,                           // ShellDemo.svg
+            execName.ToLowerInvariant(),        // shelldemo.svg
+            "icon",                             // icon.svg
+            "logo",                             // logo.svg
+        };
+
+        var searchDirs = new[]
+        {
+            Path.Combine(inputDir, "Resources", "AppIcon"),
+            Path.Combine(inputDir, "Resources", "Splash"),
+            inputDir,
+            Path.Combine(inputDir, "Resources"),
+            Path.Combine(inputDir, "Resources", "Images"),
+        };
+
+        foreach (var dir in searchDirs)
+        {
+            if (!Directory.Exists(dir)) continue;
+
+            foreach (var pattern in searchPatterns)
+            {
+                foreach (var ext in extensions)
+                {
+                    var iconPath = Path.Combine(dir, pattern + ext);
+                    if (File.Exists(iconPath))
+                        return iconPath;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private string? TryGetIconFromCsproj(string inputDir, string execName)
+    {
+        // Find the project directory (go up from publish directory)
+        var projectDir = FindProjectDirectory(inputDir, execName);
+        if (projectDir == null)
+            return null;
+
+        // Find .csproj file
+        var csprojFiles = Directory.GetFiles(projectDir, "*.csproj");
+        if (csprojFiles.Length == 0)
+            return null;
+
+        var csprojPath = csprojFiles[0];
+        Console.WriteLine($"  Found project: {Path.GetFileName(csprojPath)}");
+
+        try
+        {
+            var doc = XDocument.Load(csprojPath);
+            var ns = doc.Root?.Name.Namespace ?? XNamespace.None;
+
+            // Find MauiIcon element
+            var mauiIcon = doc.Descendants("MauiIcon").FirstOrDefault();
+            if (mauiIcon == null)
+                return null;
+
+            var includeAttr = mauiIcon.Attribute("Include")?.Value;
+            var foregroundAttr = mauiIcon.Attribute("ForegroundFile")?.Value;
+            var colorAttr = mauiIcon.Attribute("Color")?.Value ?? "#FFFFFF";
+            var bgColorAttr = mauiIcon.Attribute("BackgroundColor")?.Value;
+
+            if (string.IsNullOrEmpty(includeAttr))
+                return null;
+
+            // Resolve paths (convert backslashes to forward slashes for Linux)
+            var bgPath = Path.Combine(projectDir, includeAttr.Replace('\\', '/'));
+            var fgPath = !string.IsNullOrEmpty(foregroundAttr)
+                ? Path.Combine(projectDir, foregroundAttr.Replace('\\', '/'))
+                : null;
+
+            if (!File.Exists(bgPath))
+                return null;
+
+            // If we have both background and foreground, composite them
+            if (fgPath != null && File.Exists(fgPath))
+            {
+                var compositedIcon = CompositeIcon(bgPath, fgPath, bgColorAttr, colorAttr);
+                if (compositedIcon != null)
+                {
+                    Console.WriteLine($"  Composited icon from MauiIcon (bg + fg)");
+                    return compositedIcon;
+                }
+            }
+
+            // Otherwise, just use the background with the BackgroundColor
+            if (!string.IsNullOrEmpty(bgColorAttr))
+            {
+                Console.WriteLine($"  Using MauiIcon background: {Path.GetFileName(bgPath)}");
+            }
+
+            return bgPath;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  Warning: Could not parse csproj: {ex.Message}");
+            return null;
+        }
+    }
+
+    private string? FindProjectDirectory(string inputDir, string execName)
+    {
+        // The publish directory is typically: ProjectDir/bin/Release/net9.0/linux-arm64/publish
+        // We need to go up to find the project directory
+
+        var dir = new DirectoryInfo(inputDir);
+
+        // Go up looking for a .csproj file
+        while (dir != null)
+        {
+            var csprojFiles = dir.GetFiles("*.csproj");
+            if (csprojFiles.Length > 0)
+                return dir.FullName;
+
+            // Also check if we find a matching project name
+            if (dir.GetFiles($"{execName}.csproj").Length > 0)
+                return dir.FullName;
+
+            dir = dir.Parent;
+
+            // Don't go too far up (max 10 levels)
+            if (dir?.FullName.Split(Path.DirectorySeparatorChar).Length < 3)
+                break;
+        }
+
+        return null;
+    }
+
+    private string? CompositeIcon(string bgPath, string fgPath, string? bgColor, string fgColor)
+    {
+        try
+        {
+            // Read the foreground SVG to extract the path
+            var fgContent = File.ReadAllText(fgPath);
+            var fgDoc = XDocument.Parse(fgContent);
+
+            // Find path elements in the foreground
+            var svgNs = XNamespace.Get("http://www.w3.org/2000/svg");
+            var pathElements = fgDoc.Descendants(svgNs + "path")
+                .Concat(fgDoc.Descendants("path"))
+                .ToList();
+
+            if (pathElements.Count == 0)
+                return null;
+
+            // Extract path data
+            var pathData = string.Join(" ", pathElements
+                .Select(p => p.Attribute("d")?.Value)
+                .Where(d => !string.IsNullOrEmpty(d)));
+
+            if (string.IsNullOrEmpty(pathData))
+                return null;
+
+            // Get the viewBox or size from foreground
+            var fgRoot = fgDoc.Root;
+            var fgViewBox = fgRoot?.Attribute("viewBox")?.Value ?? "0 0 24 24";
+
+            // Parse viewBox to get dimensions
+            var vbParts = fgViewBox.Split(' ');
+            var fgWidth = vbParts.Length >= 3 ? double.Parse(vbParts[2]) : 24;
+            var fgHeight = vbParts.Length >= 4 ? double.Parse(vbParts[3]) : 24;
+
+            // Create composited SVG (256x256 with rounded corners)
+            var finalBgColor = bgColor ?? "#512BD4"; // Default MAUI purple
+            var scale = 160.0 / Math.Max(fgWidth, fgHeight); // Scale to fit in 160px centered in 256px
+            var offsetX = (256 - fgWidth * scale) / 2;
+            var offsetY = (256 - fgHeight * scale) / 2;
+
+            var compositedSvg = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<svg width=""256"" height=""256"" viewBox=""0 0 256 256"" xmlns=""http://www.w3.org/2000/svg"">
+  <rect width=""256"" height=""256"" rx=""48"" fill=""{finalBgColor}""/>
+  <g transform=""translate({offsetX:F1}, {offsetY:F1}) scale({scale:F3})"">
+    <path fill=""{fgColor}"" d=""{pathData}""/>
+  </g>
+</svg>";
+
+            // Write to temp file
+            var tempIcon = Path.Combine(Path.GetTempPath(), $"appicon_{Guid.NewGuid():N}.svg");
+            File.WriteAllText(tempIcon, compositedSvg);
+
+            return tempIcon;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  Warning: Could not composite icon: {ex.Message}");
+            return null;
+        }
     }
 
     private async Task<string?> FindAppImageTool()
