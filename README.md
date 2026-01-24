@@ -9,9 +9,10 @@ AppImage is a universal Linux package format that allows you to distribute appli
 ## Features
 
 - Package any .NET MAUI Linux app as an AppImage
-- Automatic `.desktop` file generation
-- Icon embedding
-- Built-in install/uninstall support
+- **Auto-detection** of executable and icon from your project
+- Automatic `.desktop` file generation with proper `StartupWMClass` for taskbar integration
+- Built-in installer dialog on first run
+- Install/Reinstall/Uninstall support
 - No root access required
 
 ## Prerequisites
@@ -54,7 +55,7 @@ dotnet build
 
 ```bash
 cd YourMauiApp
-dotnet publish -c Release -r linux-x64 --self-contained false
+dotnet publish -c Release -r linux-x64 --self-contained
 ```
 
 ### 2. Create the AppImage
@@ -63,12 +64,12 @@ dotnet publish -c Release -r linux-x64 --self-contained false
 openmaui-appimage \
     --input bin/Release/net9.0/linux-x64/publish \
     --output YourApp.AppImage \
-    --name "Your App" \
-    --executable YourMauiApp \
-    --icon path/to/icon.png \
-    --category Utility \
-    --version 1.0.0
+    --name "Your App"
 ```
+
+That's it! The tool automatically detects:
+- **Executable**: Finds the main executable (ELF binary or .runtimeconfig.json)
+- **Icon**: Reads `MauiIcon` from your `.csproj` and composites background + foreground
 
 ### Options
 
@@ -77,10 +78,10 @@ openmaui-appimage \
 | `--input` | `-i` | Yes | Path to published .NET app directory |
 | `--output` | `-o` | Yes | Output AppImage file path |
 | `--name` | `-n` | Yes | Application name |
-| `--executable` | `-e` | No | Main executable name (defaults to app name) |
-| `--icon` | | No | Path to icon (PNG or SVG) |
+| `--executable` | `-e` | No | Main executable name (auto-detected if not specified) |
+| `--icon` | | No | Path to icon (auto-detected from MauiIcon if not specified) |
 | `--category` | `-c` | No | Desktop category (default: Utility) |
-| `--version` | `-v` | No | App version (default: 1.0.0) |
+| `--app-version` | | No | App version (default: 1.0.0) |
 | `--comment` | | No | App description |
 
 ### Desktop Categories
@@ -89,18 +90,39 @@ Common categories: `Utility`, `Development`, `Game`, `Graphics`, `Network`, `Off
 
 ## Running the AppImage
 
-```bash
-# Make executable (first time only)
-chmod +x YourApp.AppImage
+### First Run - Installer Dialog
 
-# Run
+When you run an AppImage for the first time, a dialog appears:
+
+- **Install**: Copies to `~/.local/bin`, creates menu entry and icon
+- **Run Only**: Runs the app without installing
+
+### Already Installed
+
+If you run the AppImage again from a different location (e.g., Desktop), you'll see options:
+
+- **Run the application**: Just runs it
+- **Reinstall (update)**: Updates the installed version
+- **Uninstall**: Removes the app from your system
+
+### From the Launcher
+
+Once installed, clicking the app in your application menu runs it directly (no dialog).
+
+### Command Line Flags
+
+```bash
+# Run normally (shows dialog if not installed)
 ./YourApp.AppImage
 
-# Install to system (adds to app menu)
+# Force install dialog
 ./YourApp.AppImage --install
 
 # Uninstall
 ./YourApp.AppImage --uninstall
+
+# Show help
+./YourApp.AppImage --help
 ```
 
 ## Example: Packaging ShellDemo
@@ -108,18 +130,13 @@ chmod +x YourApp.AppImage
 ```bash
 # Build and publish
 cd maui-linux-samples/ShellDemo
-dotnet publish -c Release -r linux-x64 --self-contained false
+dotnet publish -c Release -r linux-x64 --self-contained
 
-# Create AppImage
+# Create AppImage (icon auto-detected from MauiIcon in csproj)
 openmaui-appimage \
     -i bin/Release/net9.0/linux-x64/publish \
     -o ShellDemo.AppImage \
-    -n "OpenMaui Shell Demo" \
-    -e ShellDemo \
-    --icon Resources/Images/logo_only.svg \
-    -c Utility \
-    -v 1.0.0 \
-    --comment "OpenMaui Controls Demonstration"
+    -n "Shell Demo"
 ```
 
 ## How It Works
@@ -131,32 +148,39 @@ openmaui-appimage \
    ├── YourApp.desktop     # Desktop integration
    ├── YourApp.svg         # Application icon
    └── usr/
-       └── bin/            # Your published .NET app
+       ├── bin/            # Your published .NET app
+       │   └── appicon.svg # Runtime icon for window
+       └── share/icons/    # XDG icon directories
    ```
 
 2. **AppRun Script**: A bash script that:
    - Sets up the environment (PATH, LD_LIBRARY_PATH)
-   - Handles `--install` and `--uninstall` flags
-   - Launches the .NET application via `dotnet`
+   - Shows installer dialog on first run
+   - Handles `--install`, `--uninstall`, and `--help` flags
+   - Launches the .NET application
 
-3. **appimagetool**: Packages everything into a single executable AppImage file
+3. **Desktop Integration**:
+   - Creates `.desktop` file with `StartupWMClass` for proper taskbar icon matching
+   - Installs icon to XDG icon directories
+   - Updates icon cache automatically
+
+4. **appimagetool**: Packages everything into a single executable AppImage file
 
 ## Self-Contained vs Framework-Dependent
 
-### Framework-Dependent (smaller, requires .NET runtime)
+### Self-Contained (recommended for distribution)
+```bash
+dotnet publish -c Release -r linux-x64 --self-contained
+```
+- Works on any Linux system without .NET installed
+- Larger AppImage size
+
+### Framework-Dependent (smaller size)
 ```bash
 dotnet publish -c Release -r linux-x64 --self-contained false
 ```
 - Smaller AppImage (~50-100MB smaller)
 - Requires .NET runtime on target system
-
-### Self-Contained (larger, no dependencies)
-```bash
-dotnet publish -c Release -r linux-x64 --self-contained true
-```
-- Larger AppImage
-- Works on any Linux system without .NET installed
-- Recommended for distribution
 
 ## Troubleshooting
 
@@ -164,11 +188,20 @@ dotnet publish -c Release -r linux-x64 --self-contained true
 Install appimagetool as described in Prerequisites.
 
 ### "Could not find executable"
-Use `--executable` to specify the correct DLL name (without .dll extension).
+The auto-detection looks for:
+1. ELF binaries (self-contained apps)
+2. `.runtimeconfig.json` files (framework-dependent apps)
+
+If it fails, use `--executable` to specify the correct name (without extension).
 
 ### AppImage won't run
 1. Ensure it's executable: `chmod +x YourApp.AppImage`
 2. Check for missing dependencies: `./YourApp.AppImage` (errors will be shown)
+
+### Taskbar icon not showing
+The app sets `WM_CLASS` and the `.desktop` file includes `StartupWMClass` for proper matching. If issues persist:
+1. Reinstall the app to update the `.desktop` file
+2. Log out and back in to refresh the desktop environment
 
 ### FUSE errors
 Some systems require FUSE to mount AppImages. Install with:

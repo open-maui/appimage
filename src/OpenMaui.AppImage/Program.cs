@@ -417,7 +417,7 @@ if [ -n ""$APPIMAGE"" ]; then
                 TRUE ""Run the application"" \
                 FALSE ""Reinstall (update)"" \
                 FALSE ""Uninstall"" \
-                --width=400 --height=280 $ICON_OPT 2>/dev/null)
+                --width=400 --height=380 $ICON_OPT 2>/dev/null)
             ZENITY_EXIT=$?
 
             if [ $ZENITY_EXIT -ne 0 ]; then
