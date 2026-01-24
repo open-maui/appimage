@@ -10,7 +10,7 @@ class Program
 {
     static async Task<int> Main(string[] args)
     {
-        var rootCommand = new RootCommand("Package .NET MAUI Linux apps as AppImages");
+        var rootCommand = new RootCommand("Package .NET MAUI Linux apps as AppImages or Flatpaks");
 
         var inputOption = new Option<DirectoryInfo>(
             aliases: new[] { "--input", "-i" },
@@ -19,7 +19,7 @@ class Program
 
         var outputOption = new Option<FileInfo>(
             aliases: new[] { "--output", "-o" },
-            description: "Output AppImage file path")
+            description: "Output file path (.AppImage or .flatpak)")
         { IsRequired = true };
 
         var nameOption = new Option<string>(
@@ -49,6 +49,15 @@ class Program
             aliases: new[] { "--comment" },
             description: "Application description/comment");
 
+        var formatOption = new Option<string>(
+            aliases: new[] { "--format", "-f" },
+            () => "appimage",
+            description: "Output format: appimage or flatpak");
+
+        var appIdOption = new Option<string>(
+            aliases: new[] { "--app-id" },
+            description: "Application ID for Flatpak (e.g., com.example.MyApp)");
+
         rootCommand.AddOption(inputOption);
         rootCommand.AddOption(outputOption);
         rootCommand.AddOption(nameOption);
@@ -57,6 +66,8 @@ class Program
         rootCommand.AddOption(categoryOption);
         rootCommand.AddOption(versionOption);
         rootCommand.AddOption(commentOption);
+        rootCommand.AddOption(formatOption);
+        rootCommand.AddOption(appIdOption);
 
         rootCommand.SetHandler(async (context) =>
         {
@@ -68,9 +79,10 @@ class Program
             var category = context.ParseResult.GetValueForOption(categoryOption)!;
             var version = context.ParseResult.GetValueForOption(versionOption)!;
             var comment = context.ParseResult.GetValueForOption(commentOption);
+            var format = context.ParseResult.GetValueForOption(formatOption)!.ToLowerInvariant();
+            var appId = context.ParseResult.GetValueForOption(appIdOption);
 
-            var builder = new AppImageBuilder();
-            var result = await builder.BuildAsync(new AppImageOptions
+            var options = new PackageOptions
             {
                 InputDirectory = input,
                 OutputFile = output,
@@ -79,8 +91,21 @@ class Program
                 IconPath = icon,
                 Category = category,
                 Version = version,
-                Comment = comment ?? $"{name} - Built with OpenMaui"
-            });
+                Comment = comment ?? $"{name} - Built with OpenMaui",
+                AppId = appId
+            };
+
+            bool result;
+            if (format == "flatpak")
+            {
+                var builder = new FlatpakBuilder();
+                result = await builder.BuildAsync(options);
+            }
+            else
+            {
+                var builder = new AppImageBuilder();
+                result = await builder.BuildAsync(options);
+            }
 
             context.ExitCode = result ? 0 : 1;
         });
@@ -89,7 +114,7 @@ class Program
     }
 }
 
-public record AppImageOptions
+public record PackageOptions
 {
     public required DirectoryInfo InputDirectory { get; init; }
     public required FileInfo OutputFile { get; init; }
@@ -99,11 +124,12 @@ public record AppImageOptions
     public required string Category { get; init; }
     public required string Version { get; init; }
     public required string Comment { get; init; }
+    public string? AppId { get; init; }  // For Flatpak
 }
 
 public class AppImageBuilder
 {
-    public async Task<bool> BuildAsync(AppImageOptions options)
+    public async Task<bool> BuildAsync(PackageOptions options)
     {
         Console.WriteLine($"Building AppImage for {options.AppName}...");
         Console.WriteLine($"  Input: {options.InputDirectory.FullName}");
@@ -214,7 +240,7 @@ public class AppImageBuilder
         }
     }
 
-    private async Task CreateAppRunScript(string path, AppImageOptions options)
+    private async Task CreateAppRunScript(string path, PackageOptions options)
     {
         var execName = options.ExecutableName ?? options.AppName;
         var script = $@"#!/bin/bash
@@ -355,7 +381,7 @@ exec dotnet ""$EXEC_NAME.dll"" ""$@""
         await RunCommandAsync("chmod", $"+x \"{path}\"");
     }
 
-    private async Task CreateDesktopFile(string path, AppImageOptions options)
+    private async Task CreateDesktopFile(string path, PackageOptions options)
     {
         var desktop = $@"[Desktop Entry]
 Type=Application
@@ -370,7 +396,7 @@ X-AppImage-Version={options.Version}
         await File.WriteAllTextAsync(path, desktop);
     }
 
-    private async Task SetupIcon(string appDir, AppImageOptions options)
+    private async Task SetupIcon(string appDir, PackageOptions options)
     {
         var iconName = SanitizeFileName(options.AppName);
 
@@ -609,9 +635,9 @@ X-AppImage-Version={options.Version}
             // Read the foreground SVG to extract the path
             var fgContent = File.ReadAllText(fgPath);
             var fgDoc = XDocument.Parse(fgContent);
+            var svgNs = XNamespace.Get("http://www.w3.org/2000/svg");
 
             // Find path elements in the foreground
-            var svgNs = XNamespace.Get("http://www.w3.org/2000/svg");
             var pathElements = fgDoc.Descendants(svgNs + "path")
                 .Concat(fgDoc.Descendants("path"))
                 .ToList();
@@ -627,20 +653,23 @@ X-AppImage-Version={options.Version}
             if (string.IsNullOrEmpty(pathData))
                 return null;
 
-            // Get the viewBox or size from foreground
-            var fgRoot = fgDoc.Root;
-            var fgViewBox = fgRoot?.Attribute("viewBox")?.Value ?? "0 0 24 24";
+            // Check if paths are Material Icons style (coordinates in 0-24 range)
+            // by looking at the path coordinates
+            var isMaterialIcon = pathData.Split(new[] { ' ', 'M', 'L', 'H', 'V', 'C', 'S', 'Q', 'T', 'A', 'Z', 'm', 'l', 'h', 'v', 'c', 's', 'q', 't', 'a', 'z' }, StringSplitOptions.RemoveEmptyEntries)
+                .Where(s => double.TryParse(s, out var v) && v >= 0)
+                .Select(s => double.Parse(s))
+                .DefaultIfEmpty(0)
+                .Max() <= 30; // Material icons use 24x24 coordinate system
 
-            // Parse viewBox to get dimensions
-            var vbParts = fgViewBox.Split(' ');
-            var fgWidth = vbParts.Length >= 3 ? double.Parse(vbParts[2]) : 24;
-            var fgHeight = vbParts.Length >= 4 ? double.Parse(vbParts[3]) : 24;
+            double sourceSize = isMaterialIcon ? 24.0 : 456.0;
 
             // Create composited SVG (256x256 with rounded corners)
             var finalBgColor = bgColor ?? "#512BD4"; // Default MAUI purple
-            var scale = 160.0 / Math.Max(fgWidth, fgHeight); // Scale to fit in 160px centered in 256px
-            var offsetX = (256 - fgWidth * scale) / 2;
-            var offsetY = (256 - fgHeight * scale) / 2;
+
+            // Scale foreground to fit nicely (about 160px in a 256px icon)
+            var scale = 160.0 / sourceSize;
+            var offsetX = (256 - sourceSize * scale) / 2;
+            var offsetY = (256 - sourceSize * scale) / 2;
 
             var compositedSvg = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
 <svg width=""256"" height=""256"" viewBox=""0 0 256 256"" xmlns=""http://www.w3.org/2000/svg"">
@@ -752,6 +781,330 @@ X-AppImage-Version={options.Version}
                 foreach (var (key, value) in envVars)
                     psi.EnvironmentVariables[key] = value;
             }
+
+            using var process = Process.Start(psi);
+            if (process == null) return -1;
+
+            await process.WaitForExitAsync();
+            return process.ExitCode;
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+}
+
+public class FlatpakBuilder
+{
+    public async Task<bool> BuildAsync(PackageOptions options)
+    {
+        Console.WriteLine($"Building Flatpak for {options.AppName}...");
+        Console.WriteLine($"  Input: {options.InputDirectory.FullName}");
+        Console.WriteLine($"  Output: {options.OutputFile.FullName}");
+
+        // Validate input directory
+        if (!options.InputDirectory.Exists)
+        {
+            Console.Error.WriteLine($"Error: Input directory does not exist: {options.InputDirectory.FullName}");
+            return false;
+        }
+
+        // Find the main executable
+        var execName = options.ExecutableName ?? options.AppName;
+        var mainDll = Path.Combine(options.InputDirectory.FullName, $"{execName}.dll");
+        if (!File.Exists(mainDll))
+        {
+            Console.Error.WriteLine($"Error: Could not find {execName}.dll in {options.InputDirectory.FullName}");
+            return false;
+        }
+
+        // Generate app ID if not provided
+        var appId = options.AppId ?? $"com.openmaui.{SanitizeAppId(options.AppName)}";
+        Console.WriteLine($"  App ID: {appId}");
+
+        // Create temporary build directory
+        var tempDir = Path.Combine(Path.GetTempPath(), $"flatpak-{Guid.NewGuid():N}");
+
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+
+            // Setup Flatpak runtime (install if needed)
+            Console.WriteLine("  Checking Flatpak runtime...");
+            await EnsureRuntimeInstalled();
+
+            // Create manifest
+            Console.WriteLine("  Creating manifest...");
+            var manifestPath = Path.Combine(tempDir, $"{appId}.yaml");
+            await CreateManifest(manifestPath, options, appId, execName);
+
+            // Create app files directory structure
+            Console.WriteLine("  Preparing app files...");
+            var filesDir = Path.Combine(tempDir, "files");
+            Directory.CreateDirectory(filesDir);
+
+            // Copy application files
+            var appDir = Path.Combine(filesDir, "app");
+            CopyDirectory(options.InputDirectory.FullName, appDir);
+
+            // Setup icon
+            await SetupIcon(tempDir, filesDir, options, appId);
+
+            // Create desktop file
+            await CreateDesktopFile(filesDir, options, appId, execName);
+
+            // Build the Flatpak
+            Console.WriteLine("  Building Flatpak (this may take a while)...");
+            var success = await BuildFlatpak(tempDir, manifestPath, options.OutputFile.FullName, appId);
+
+            if (success)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"Flatpak created successfully: {options.OutputFile.FullName}");
+                Console.WriteLine();
+                Console.WriteLine("To install:");
+                Console.WriteLine($"  flatpak install --user {options.OutputFile.Name}");
+                Console.WriteLine();
+                Console.WriteLine("To run:");
+                Console.WriteLine($"  flatpak run {appId}");
+            }
+
+            return success;
+        }
+        finally
+        {
+            // Cleanup temp directory
+            try
+            {
+                if (Directory.Exists(tempDir))
+                    Directory.Delete(tempDir, recursive: true);
+            }
+            catch { }
+        }
+    }
+
+    private async Task EnsureRuntimeInstalled()
+    {
+        // Check if freedesktop runtime is installed
+        var result = await RunCommandAsync("flatpak", "info org.freedesktop.Platform//23.08", captureOutput: true);
+        if (result != 0)
+        {
+            Console.WriteLine("    Installing Freedesktop runtime...");
+            await RunCommandAsync("flatpak", "install -y --user flathub org.freedesktop.Platform//23.08 org.freedesktop.Sdk//23.08");
+        }
+    }
+
+    private async Task CreateManifest(string path, PackageOptions options, string appId, string execName)
+    {
+        // Create a Flatpak manifest that bundles the .NET app
+        var manifest = $@"app-id: {appId}
+runtime: org.freedesktop.Platform
+runtime-version: '23.08'
+sdk: org.freedesktop.Sdk
+command: run-app.sh
+
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri
+  - --filesystem=home
+  - --talk-name=org.freedesktop.Notifications
+
+modules:
+  - name: dotnet-runtime
+    buildsystem: simple
+    build-commands:
+      - install -d /app/dotnet
+      - tar -xzf dotnet-runtime-*.tar.gz -C /app/dotnet
+    sources:
+      - type: file
+        url: {GetDotnetRuntimeInfo().url}
+        sha256: {GetDotnetRuntimeInfo().sha256}
+
+  - name: {SanitizeAppId(options.AppName)}
+    buildsystem: simple
+    build-commands:
+      - install -d /app/app
+      - cp -r app/* /app/app/
+      - install -Dm755 run-app.sh /app/bin/run-app.sh
+      - install -Dm644 {appId}.desktop /app/share/applications/{appId}.desktop
+      - install -Dm644 {appId}.svg /app/share/icons/hicolor/scalable/apps/{appId}.svg
+    sources:
+      - type: dir
+        path: files
+      - type: script
+        dest-filename: run-app.sh
+        commands:
+          - 'export DOTNET_ROOT=/app/dotnet'
+          - 'export PATH=$DOTNET_ROOT:$PATH'
+          - 'exec /app/dotnet/dotnet /app/app/{execName}.dll ""$@""'
+";
+        await File.WriteAllTextAsync(path, manifest);
+    }
+
+    private async Task SetupIcon(string tempDir, string filesDir, PackageOptions options, string appId)
+    {
+        var iconPath = options.IconPath?.FullName;
+
+        // Try to find icon from csproj if not provided
+        if (string.IsNullOrEmpty(iconPath) || !File.Exists(iconPath))
+        {
+            iconPath = FindIcon(options.InputDirectory.FullName, options.ExecutableName ?? options.AppName);
+        }
+
+        var destIcon = Path.Combine(filesDir, $"{appId}.svg");
+
+        if (!string.IsNullOrEmpty(iconPath) && File.Exists(iconPath))
+        {
+            File.Copy(iconPath, destIcon, overwrite: true);
+        }
+        else
+        {
+            // Create default icon
+            var defaultIcon = $@"<?xml version=""1.0"" encoding=""UTF-8""?>
+<svg width=""256"" height=""256"" viewBox=""0 0 256 256"" xmlns=""http://www.w3.org/2000/svg"">
+  <rect width=""256"" height=""256"" rx=""48"" fill=""#512BD4""/>
+  <text x=""128"" y=""170"" font-family=""sans-serif"" font-size=""140"" font-weight=""bold""
+        text-anchor=""middle"" fill=""white"">{options.AppName[0]}</text>
+</svg>";
+            await File.WriteAllTextAsync(destIcon, defaultIcon);
+        }
+    }
+
+    private async Task CreateDesktopFile(string filesDir, PackageOptions options, string appId, string execName)
+    {
+        var desktop = $@"[Desktop Entry]
+Type=Application
+Name={options.AppName}
+Comment={options.Comment}
+Exec=run-app.sh
+Icon={appId}
+Categories={options.Category};
+Terminal=false
+";
+        var desktopPath = Path.Combine(filesDir, $"{appId}.desktop");
+        await File.WriteAllTextAsync(desktopPath, desktop);
+    }
+
+    private async Task<bool> BuildFlatpak(string tempDir, string manifestPath, string outputPath, string appId)
+    {
+        var buildDir = Path.Combine(tempDir, "build");
+        var repoDir = Path.Combine(tempDir, "repo");
+
+        // Build the flatpak
+        var buildResult = await RunCommandAsync("flatpak-builder",
+            $"--force-clean --user --repo=\"{repoDir}\" \"{buildDir}\" \"{manifestPath}\"");
+
+        if (buildResult != 0)
+        {
+            Console.Error.WriteLine("Error: flatpak-builder failed");
+            return false;
+        }
+
+        // Create the bundle
+        var bundleResult = await RunCommandAsync("flatpak",
+            $"build-bundle \"{repoDir}\" \"{outputPath}\" {appId}");
+
+        return bundleResult == 0;
+    }
+
+    private string? FindIcon(string inputDir, string execName)
+    {
+        var extensions = new[] { ".svg", ".png" };
+        var patterns = new[] { "appicon_combined", "appicon", execName.ToLowerInvariant(), "icon" };
+        var dirs = new[]
+        {
+            Path.Combine(inputDir, "Resources", "AppIcon"),
+            inputDir
+        };
+
+        foreach (var dir in dirs)
+        {
+            if (!Directory.Exists(dir)) continue;
+            foreach (var pattern in patterns)
+            {
+                foreach (var ext in extensions)
+                {
+                    var path = Path.Combine(dir, pattern + ext);
+                    if (File.Exists(path)) return path;
+                }
+            }
+        }
+        return null;
+    }
+
+    private void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.GetFiles(source))
+        {
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: true);
+        }
+        foreach (var dir in Directory.GetDirectories(source))
+        {
+            CopyDirectory(dir, Path.Combine(destination, Path.GetFileName(dir)));
+        }
+    }
+
+    private string SanitizeAppId(string name)
+    {
+        var result = new StringBuilder();
+        foreach (var c in name.ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(c))
+                result.Append(c);
+        }
+        return result.ToString();
+    }
+
+    private string GetArchitecture()
+    {
+        return System.Runtime.InteropServices.RuntimeInformation.OSArchitecture switch
+        {
+            System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
+            System.Runtime.InteropServices.Architecture.X64 => "x64",
+            _ => "x64"
+        };
+    }
+
+    private (string url, string sha256) GetDotnetRuntimeInfo()
+    {
+        // .NET 9.0.12 runtime download URLs and checksums (latest stable)
+        var arch = GetArchitecture();
+        return arch switch
+        {
+            "arm64" => (
+                "https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.12/dotnet-runtime-9.0.12-linux-arm64.tar.gz",
+                "a3a67b4e0e8d0f9255eb18a5036208c80d9ca271cfa43ec6e4db769578a2f127"
+            ),
+            "x64" => (
+                "https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.12/dotnet-runtime-9.0.12-linux-x64.tar.gz",
+                "804aa8357eb498bfc82a403182c43aaad05c3c982f98d1752df9b5b476e572fd"
+            ),
+            _ => (
+                "https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.12/dotnet-runtime-9.0.12-linux-x64.tar.gz",
+                "804aa8357eb498bfc82a403182c43aaad05c3c982f98d1752df9b5b476e572fd"
+            )
+        };
+    }
+
+    private async Task<int> RunCommandAsync(string command, string arguments, bool captureOutput = false)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = command,
+                Arguments = arguments,
+                UseShellExecute = false,
+                RedirectStandardOutput = captureOutput,
+                RedirectStandardError = captureOutput,
+                CreateNoWindow = true
+            };
 
             using var process = Process.Start(psi);
             if (process == null) return -1;

@@ -45,6 +45,11 @@ publish/
 *.AppImage
 *.AppDir/
 
+# Flatpak build artifacts
+.flatpak-builder/
+*.flatpak
+repo/
+
 # OS files
 .DS_Store
 Thumbs.db
