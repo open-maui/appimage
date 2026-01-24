@@ -1,0 +1,50 @@
+# Build outputs
+bin/
+obj/
+out/
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+
+# IDE
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.idea/
+*.swp
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+
+# Publish output
+publish/
+
+# AppImage artifacts
+*.AppImage
+*.AppDir/
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -158,9 +158,7 @@ public class AppImageBuilder
             Console.WriteLine("  Copying application files...");
             CopyDirectory(options.InputDirectory.FullName, Path.Combine(appDir, "usr", "bin"));
 
-            // Copy installer if available
-            Console.WriteLine("  Copying installer...");
-            await CopyInstaller(Path.Combine(appDir, "usr", "bin"));
+            // Note: Using zenity for installer dialog (no bundled installer needed)
 
             // Create AppRun script
             Console.WriteLine("  Creating AppRun script...");
@@ -204,44 +202,6 @@ public class AppImageBuilder
         }
     }
 
-    private async Task CopyInstaller(string destDir)
-    {
-        // Find installer in the same directory as the tool
-        var toolDir = Path.GetDirectoryName(typeof(AppImageBuilder).Assembly.Location) ?? "";
-        var installerDll = Path.Combine(toolDir, "..", "..", "..", "..", "OpenMaui.AppImage.Installer", "bin", "Debug", "net9.0");
-
-        // Also check published location
-        if (!Directory.Exists(installerDll))
-        {
-            installerDll = Path.Combine(toolDir, "installer");
-        }
-
-        // Also check relative to current directory
-        if (!Directory.Exists(installerDll))
-        {
-            var currentDir = Directory.GetCurrentDirectory();
-            installerDll = Path.Combine(currentDir, "src", "OpenMaui.AppImage.Installer", "bin", "Debug", "net9.0");
-        }
-
-        if (Directory.Exists(installerDll))
-        {
-            var installerFiles = new[] { "OpenMaui.AppImage.Installer.dll", "OpenMaui.AppImage.Installer.deps.json", "OpenMaui.AppImage.Installer.runtimeconfig.json" };
-            foreach (var file in installerFiles)
-            {
-                var srcPath = Path.Combine(installerDll, file);
-                if (File.Exists(srcPath))
-                {
-                    File.Copy(srcPath, Path.Combine(destDir, file), overwrite: true);
-                }
-            }
-            Console.WriteLine("    Installer included for first-run dialog.");
-        }
-        else
-        {
-            Console.WriteLine("    Installer not found, skipping first-run dialog.");
-        }
-    }
-
     private async Task CreateAppRunScript(string path, AppImageOptions options)
     {
         var execName = options.ExecutableName ?? options.AppName;
@@ -263,6 +223,9 @@ export LD_LIBRARY_PATH=""$HERE/usr/bin:$LD_LIBRARY_PATH""
 export XDG_DATA_DIRS=""$HERE/usr/share:${{XDG_DATA_DIRS:-/usr/local/share:/usr/share}}""
 
 INSTALLED_MARKER=""$HOME/.local/share/openmaui-installed""
+BIN_DIR=""$HOME/.local/bin""
+APPS_DIR=""$HOME/.local/share/applications""
+ICONS_DIR=""$HOME/.local/share/icons/hicolor/256x256/apps""
 
 # Handle command line flags
 if [ ""$1"" = ""--install"" ]; then
@@ -272,11 +235,15 @@ elif [ ""$1"" = ""--uninstall"" ]; then
     echo ""Uninstalling $APPIMAGE_NAME...""
     APPIMAGE_BASENAME=$(basename ""$APPIMAGE"")
     SANITIZED_NAME=$(echo ""$APPIMAGE_NAME"" | tr ' ' '_')
-    rm -f ""$HOME/.local/bin/$APPIMAGE_BASENAME""
-    rm -f ""$HOME/.local/share/applications/${{SANITIZED_NAME}}.desktop""
+    rm -f ""$BIN_DIR/$APPIMAGE_BASENAME""
+    rm -f ""$APPS_DIR/${{SANITIZED_NAME}}.desktop""
     rm -f ""$INSTALLED_MARKER/$APPIMAGE_BASENAME""
-    command -v update-desktop-database &> /dev/null && update-desktop-database ""$HOME/.local/share/applications"" 2>/dev/null
-    echo ""Uninstallation complete!""
+    command -v update-desktop-database &> /dev/null && update-desktop-database ""$APPS_DIR"" 2>/dev/null
+    if command -v zenity &> /dev/null; then
+        zenity --info --title=""Uninstall Complete"" --text=""$APPIMAGE_NAME has been removed."" --width=300 2>/dev/null
+    else
+        echo ""Uninstallation complete!""
+    fi
     exit 0
 elif [ ""$1"" = ""--help"" ]; then
     echo ""Usage: $(basename ""$APPIMAGE"") [OPTIONS]""
@@ -288,20 +255,73 @@ elif [ ""$1"" = ""--help"" ]; then
     exit 0
 fi
 
-# Check for first run
+# Installation function
+do_install() {{
+    APPIMAGE_BASENAME=$(basename ""$APPIMAGE"")
+    SANITIZED=$(echo ""$APPIMAGE_NAME"" | tr ' ' '_')
+
+    mkdir -p ""$BIN_DIR"" ""$APPS_DIR"" ""$ICONS_DIR"" ""$INSTALLED_MARKER""
+
+    # Copy AppImage
+    cp ""$APPIMAGE"" ""$BIN_DIR/$APPIMAGE_BASENAME""
+    chmod +x ""$BIN_DIR/$APPIMAGE_BASENAME""
+
+    # Copy icon if available
+    for ext in svg png ico; do
+        if [ -f ""$HERE/${{SANITIZED}}.${{ext}}"" ]; then
+            cp ""$HERE/${{SANITIZED}}.${{ext}}"" ""$ICONS_DIR/${{SANITIZED}}.${{ext}}""
+            break
+        fi
+    done
+
+    # Create .desktop file
+    cat > ""$APPS_DIR/${{SANITIZED}}.desktop"" << DESKTOP
+[Desktop Entry]
+Type=Application
+Name=$APPIMAGE_NAME
+Comment=$APPIMAGE_COMMENT
+Exec=$BIN_DIR/$APPIMAGE_BASENAME
+Icon=$SANITIZED
+Categories=$APPIMAGE_CATEGORY;
+Terminal=false
+X-AppImage-Version=$APPIMAGE_VERSION
+DESKTOP
+
+    # Mark as installed
+    echo ""$(date -Iseconds)"" > ""$INSTALLED_MARKER/$APPIMAGE_BASENAME""
+
+    # Update desktop database
+    command -v update-desktop-database &> /dev/null && update-desktop-database ""$APPS_DIR"" 2>/dev/null
+
+    return 0
+}}
+
+# Check for first run - show zenity dialog
 if [ -n ""$APPIMAGE"" ]; then
     APPIMAGE_BASENAME=$(basename ""$APPIMAGE"")
     if [ ! -f ""$INSTALLED_MARKER/$APPIMAGE_BASENAME"" ] || [ ""$SHOW_INSTALLER"" = ""1"" ]; then
-        if [ -f ""$HERE/usr/bin/OpenMaui.AppImage.Installer.dll"" ]; then
-            SANITIZED=$(echo ""$APPIMAGE_NAME"" | tr ' ' '_')
-            ICON_PATH=""""
-            for ext in svg png ico; do
-                [ -f ""$HERE/${{SANITIZED}}.${{ext}}"" ] && ICON_PATH=""$HERE/${{SANITIZED}}.${{ext}}"" && break
-            done
-            cd ""$HERE/usr/bin""
-            dotnet OpenMaui.AppImage.Installer.dll --name ""$APPIMAGE_NAME"" --appimage ""$APPIMAGE"" --comment ""$APPIMAGE_COMMENT"" --category ""$APPIMAGE_CATEGORY"" --version ""$APPIMAGE_VERSION"" ${{ICON_PATH:+--icon ""$ICON_PATH""}}
-            RESULT=$?
-            [ ""$RESULT"" = ""1"" ] && exit 0
+        if command -v zenity &> /dev/null; then
+            CHOICE=$(zenity --question --title=""$APPIMAGE_NAME"" \
+                --text=""<b>$APPIMAGE_NAME</b>\nVersion $APPIMAGE_VERSION\n\n$APPIMAGE_COMMENT\n\nWould you like to install this application?"" \
+                --ok-label=""Install"" --cancel-label=""Run Without Installing"" \
+                --extra-button=""Cancel"" \
+                --width=350 --icon-name=application-x-executable 2>/dev/null; echo $?)
+
+            case ""$CHOICE"" in
+                0)  # Install clicked
+                    do_install
+                    if [ $? -eq 0 ]; then
+                        zenity --info --title=""Installation Complete"" \
+                            --text=""$APPIMAGE_NAME has been installed.\n\nYou can find it in your application menu."" \
+                            --width=300 2>/dev/null
+                    fi
+                    ;;
+                1)  # Run Without Installing
+                    ;;
+                *)  # Cancel or closed
+                    exit 0
+                    ;;
+            esac
         fi
     fi
 fi
