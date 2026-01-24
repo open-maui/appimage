@@ -341,6 +341,8 @@ do_install() {{
     fi
 
     # Create .desktop file
+    # WM_CLASS is app name without spaces or underscores
+    WM_CLASS=$(echo ""$APPIMAGE_NAME"" | tr -d ' _')
     cat > ""$APPS_DIR/${{SANITIZED}}.desktop"" << DESKTOP
 [Desktop Entry]
 Type=Application
@@ -350,6 +352,7 @@ Exec=$BIN_DIR/$APPIMAGE_BASENAME
 Icon=$SANITIZED
 Categories=$APPIMAGE_CATEGORY;
 Terminal=false
+StartupWMClass=$WM_CLASS
 X-AppImage-Version=$APPIMAGE_VERSION
 DESKTOP
 
@@ -363,22 +366,26 @@ DESKTOP
     return 0
 }}
 
-# Check for first run - show zenity dialog
+# Check for first run or if already installed - show zenity dialog
+# Skip dialog entirely if running from installed location (~/.local/bin)
 if [ -n ""$APPIMAGE"" ]; then
     APPIMAGE_BASENAME=$(basename ""$APPIMAGE"")
-    if [ ! -f ""$INSTALLED_MARKER/$APPIMAGE_BASENAME"" ] || [ ""$SHOW_INSTALLER"" = ""1"" ]; then
+    APPIMAGE_DIR=$(dirname ""$APPIMAGE"")
+    SANITIZED=$(echo ""$APPIMAGE_NAME"" | tr ' ' '_')
+
+    # If running from installed location, just run the app (no dialog)
+    if [ ""$APPIMAGE_DIR"" = ""$BIN_DIR"" ]; then
+        : # Skip to running the app
+    elif [ ""$SHOW_INSTALLER"" = ""1"" ]; then
+        # Forced install dialog
         if command -v zenity &> /dev/null; then
-            # Find app icon
-            SANITIZED=$(echo ""$APPIMAGE_NAME"" | tr ' ' '_')
             ICON_PATH=""""
             for ext in svg png ico; do
                 [ -f ""$HERE/${{SANITIZED}}.${{ext}}"" ] && ICON_PATH=""$HERE/${{SANITIZED}}.${{ext}}"" && break
             done
-
             ICON_OPT=""""
             [ -n ""$ICON_PATH"" ] && ICON_OPT=""--window-icon=$ICON_PATH""
 
-            # Run zenity and capture exit code properly
             zenity --question --title=""$APPIMAGE_NAME"" \
                 --text=""<b>$APPIMAGE_NAME</b>\nVersion $APPIMAGE_VERSION\n\n$APPIMAGE_COMMENT\n\nWould you like to install this application?"" \
                 --ok-label=""Install"" --cancel-label=""Run Only"" \
@@ -386,18 +393,85 @@ if [ -n ""$APPIMAGE"" ]; then
             ZENITY_EXIT=$?
 
             if [ $ZENITY_EXIT -eq 0 ]; then
-                # Install clicked
                 do_install
-                if [ $? -eq 0 ]; then
-                    zenity --info --title=""Installation Complete"" \
-                        --text=""$APPIMAGE_NAME has been installed.\n\nYou can find it in your application menu."" \
+                zenity --info --title=""Installation Complete"" \
+                    --text=""$APPIMAGE_NAME has been installed.\n\nYou can find it in your application menu."" \
+                    --width=300 $ICON_OPT 2>/dev/null
+            elif [ $ZENITY_EXIT -ne 1 ]; then
+                exit 0
+            fi
+        fi
+    elif [ -f ""$APPS_DIR/${{SANITIZED}}.desktop"" ]; then
+        # Already installed and running from different location - show options
+        if command -v zenity &> /dev/null; then
+            ICON_PATH=""""
+            for ext in svg png ico; do
+                [ -f ""$HERE/${{SANITIZED}}.${{ext}}"" ] && ICON_PATH=""$HERE/${{SANITIZED}}.${{ext}}"" && break
+            done
+            ICON_OPT=""""
+            [ -n ""$ICON_PATH"" ] && ICON_OPT=""--window-icon=$ICON_PATH""
+
+            CHOICE=$(zenity --list --title=""$APPIMAGE_NAME"" \
+                --text=""<b>$APPIMAGE_NAME</b> is already installed.\n\nWhat would you like to do?"" \
+                --radiolist --column="" "" --column=""Action"" \
+                TRUE ""Run the application"" \
+                FALSE ""Reinstall (update)"" \
+                FALSE ""Uninstall"" \
+                --width=400 --height=280 $ICON_OPT 2>/dev/null)
+            ZENITY_EXIT=$?
+
+            if [ $ZENITY_EXIT -ne 0 ]; then
+                exit 0
+            fi
+
+            case ""$CHOICE"" in
+                ""Run the application"")
+                    :
+                    ;;
+                ""Reinstall (update)"")
+                    do_install
+                    zenity --info --title=""Update Complete"" \
+                        --text=""$APPIMAGE_NAME has been updated."" \
                         --width=300 $ICON_OPT 2>/dev/null
-                fi
-            elif [ $ZENITY_EXIT -eq 1 ]; then
-                # Run Only clicked - continue to run the app
-                :
-            else
-                # Dialog closed or error
+                    ;;
+                ""Uninstall"")
+                    rm -f ""$BIN_DIR/$APPIMAGE_BASENAME""
+                    rm -f ""$APPS_DIR/${{SANITIZED}}.desktop""
+                    rm -f ""$ICONS_DIR_SCALABLE/${{SANITIZED}}.svg""
+                    rm -f ""$ICONS_DIR_256/${{SANITIZED}}.png""
+                    rm -f ""$ICONS_DIR_256/${{SANITIZED}}.ico""
+                    rm -f ""$INSTALLED_MARKER/$APPIMAGE_BASENAME""
+                    command -v update-desktop-database &> /dev/null && update-desktop-database ""$APPS_DIR"" 2>/dev/null
+                    command -v gtk-update-icon-cache &> /dev/null && gtk-update-icon-cache -f -t ""$HOME/.local/share/icons/hicolor"" 2>/dev/null
+                    zenity --info --title=""Uninstall Complete"" \
+                        --text=""$APPIMAGE_NAME has been removed."" \
+                        --width=300 $ICON_OPT 2>/dev/null
+                    exit 0
+                    ;;
+            esac
+        fi
+    else
+        # Not installed - show install dialog
+        if command -v zenity &> /dev/null; then
+            ICON_PATH=""""
+            for ext in svg png ico; do
+                [ -f ""$HERE/${{SANITIZED}}.${{ext}}"" ] && ICON_PATH=""$HERE/${{SANITIZED}}.${{ext}}"" && break
+            done
+            ICON_OPT=""""
+            [ -n ""$ICON_PATH"" ] && ICON_OPT=""--window-icon=$ICON_PATH""
+
+            zenity --question --title=""$APPIMAGE_NAME"" \
+                --text=""<b>$APPIMAGE_NAME</b>\nVersion $APPIMAGE_VERSION\n\n$APPIMAGE_COMMENT\n\nWould you like to install this application?"" \
+                --ok-label=""Install"" --cancel-label=""Run Only"" \
+                --width=350 $ICON_OPT 2>/dev/null
+            ZENITY_EXIT=$?
+
+            if [ $ZENITY_EXIT -eq 0 ]; then
+                do_install
+                zenity --info --title=""Installation Complete"" \
+                    --text=""$APPIMAGE_NAME has been installed.\n\nYou can find it in your application menu."" \
+                    --width=300 $ICON_OPT 2>/dev/null
+            elif [ $ZENITY_EXIT -ne 1 ]; then
                 exit 0
             fi
         fi
@@ -426,6 +500,8 @@ fi
 
     private async Task CreateDesktopFile(string path, PackageOptions options)
     {
+        // WM_CLASS is app name without spaces or underscores (matches X11Window.cs)
+        var wmClass = options.AppName.Replace(" ", "").Replace("_", "");
         var desktop = $@"[Desktop Entry]
 Type=Application
 Name={options.AppName}
@@ -434,6 +510,7 @@ Exec={SanitizeFileName(options.AppName)}
 Icon={SanitizeFileName(options.AppName)}
 Categories={options.Category};
 Terminal=false
+StartupWMClass={wmClass}
 X-AppImage-Version={options.Version}
 ";
         await File.WriteAllTextAsync(path, desktop);
