@@ -1,7 +1,3 @@
-# OpenMaui.AppImage
-
-A CLI tool to package .NET MAUI Linux applications as AppImages.
-
 ## What is AppImage?
 
 AppImage is a universal Linux package format that allows you to distribute applications as a single executable file that works on most Linux distributions without installation.
