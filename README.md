@@ -13,7 +13,7 @@ AppImage is a universal Linux package format that allows you to distribute appli
 
 ## Prerequisites
 
-1. **.NET 9 SDK** or later
+1. **.NET 10 SDK** or later
 2. **appimagetool** - Download from [AppImageKit releases](https://github.com/AppImage/AppImageKit/releases)
 
 ### Installing appimagetool
@@ -40,8 +40,8 @@ dotnet tool install --global OpenMaui.AppImage
 ### From source
 
 ```bash
-git clone https://github.com/AuroraNetworks/openmaui-appimage.git
-cd openmaui-appimage
+git clone https://github.com/open-maui/appimage.git
+cd appimage
 dotnet build
 ```
 
@@ -58,7 +58,7 @@ dotnet publish -c Release -r linux-x64 --self-contained
 
 ```bash
 openmaui-appimage \
-    --input bin/Release/net9.0/linux-x64/publish \
+    --input bin/Release/net10.0/linux-x64/publish \
     --output YourApp.AppImage \
     --name "Your App"
 ```
@@ -130,7 +130,7 @@ dotnet publish -c Release -r linux-x64 --self-contained
 
 # Create AppImage (icon auto-detected from MauiIcon in csproj)
 openmaui-appimage \
-    -i bin/Release/net9.0/linux-x64/publish \
+    -i bin/Release/net10.0/linux-x64/publish \
     -o ShellDemo.AppImage \
     -n "Shell Demo"
 ```
