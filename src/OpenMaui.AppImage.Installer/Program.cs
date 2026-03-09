@@ -245,6 +245,7 @@ class InstallerDialog : Window
             }
 
             // Create .desktop file
+            var wmClass = _appName.Replace(" ", "").Replace("_", "");
             var desktopContent = $@"[Desktop Entry]
 Type=Application
 Name={_appName}
@@ -253,6 +254,7 @@ Exec={destPath}
 Icon={iconName}
 Categories={_category};
 Terminal=false
+StartupWMClass={wmClass}
 X-AppImage-Version={_version}
 ";
             var desktopPath = IOPath.Combine(applicationsDir, $"{sanitizedName}.desktop");

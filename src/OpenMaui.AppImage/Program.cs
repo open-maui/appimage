@@ -587,7 +587,7 @@ X-AppImage-Version={options.Version}
             Console.Error.WriteLine("Error: appimagetool not found.");
             Console.Error.WriteLine();
             Console.Error.WriteLine("Please install appimagetool:");
-            Console.Error.WriteLine("  wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage");
+            Console.Error.WriteLine("  wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage");
             Console.Error.WriteLine("  chmod +x appimagetool-x86_64.AppImage");
             Console.Error.WriteLine("  sudo mv appimagetool-x86_64.AppImage /usr/local/bin/appimagetool");
             Console.Error.WriteLine();
@@ -641,7 +641,10 @@ X-AppImage-Version={options.Version}
                     return fileName;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  Warning: Could not read {fileName}: {ex.Message}");
+            }
         }
 
         // Strategy 2: Look for a .dll that matches the app name pattern
@@ -797,7 +800,7 @@ X-AppImage-Version={options.Version}
 
     private string? FindProjectDirectory(string inputDir, string execName)
     {
-        // The publish directory is typically: ProjectDir/bin/Release/net9.0/linux-arm64/publish
+        // The publish directory is typically: ProjectDir/bin/Release/net10.0/linux-arm64/publish
         // We need to go up to find the project directory
 
         var dir = new DirectoryInfo(inputDir);
@@ -983,8 +986,9 @@ X-AppImage-Version={options.Version}
             await process.WaitForExitAsync();
             return process.ExitCode;
         }
-        catch
+        catch (Exception ex)
         {
+            Console.Error.WriteLine($"  Error running {command}: {ex.Message}");
             return -1;
         }
     }
@@ -1118,7 +1122,7 @@ modules:
     sources:
       - type: file
         url: {GetDotnetRuntimeInfo().url}
-        sha256: {GetDotnetRuntimeInfo().sha256}
+        sha512: {GetDotnetRuntimeInfo().sha512}
 
   - name: {SanitizeAppId(options.AppName)}
     buildsystem: simple
@@ -1266,23 +1270,22 @@ Terminal=false
         };
     }
 
-    private (string url, string sha256) GetDotnetRuntimeInfo()
+    private (string url, string sha512) GetDotnetRuntimeInfo()
     {
-        // .NET 9.0.12 runtime download URLs and checksums (latest stable)
+        // .NET 10.0.3 runtime - for Flatpak bundling
+        // Update these when new .NET 10 releases are published
+        // Checksums: https://builds.dotnet.microsoft.com/dotnet/checksums/10.0.3-sha.txt
         var arch = GetArchitecture();
+        var version = "10.0.3";
         return arch switch
         {
             "arm64" => (
-                "https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.12/dotnet-runtime-9.0.12-linux-arm64.tar.gz",
-                "a3a67b4e0e8d0f9255eb18a5036208c80d9ca271cfa43ec6e4db769578a2f127"
-            ),
-            "x64" => (
-                "https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.12/dotnet-runtime-9.0.12-linux-x64.tar.gz",
-                "804aa8357eb498bfc82a403182c43aaad05c3c982f98d1752df9b5b476e572fd"
+                $"https://builds.dotnet.microsoft.com/dotnet/Runtime/{version}/dotnet-runtime-{version}-linux-arm64.tar.gz",
+                "3852fab601850a55d8390b5dceee9faf8443e69314aa2dcb9662de28af8209147253d68fa5731720dc40f756b4ffd0a007172b46fe4cf3630d99f78b1482cf51"
             ),
             _ => (
-                "https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.12/dotnet-runtime-9.0.12-linux-x64.tar.gz",
-                "804aa8357eb498bfc82a403182c43aaad05c3c982f98d1752df9b5b476e572fd"
+                $"https://builds.dotnet.microsoft.com/dotnet/Runtime/{version}/dotnet-runtime-{version}-linux-x64.tar.gz",
+                "870598f1294c0a029757646bc82fe41916cdb6df6cfd6f18b4487b48e9a0348b717be659f5ce3a6153d3f8dd3326ec59a1663c0b2ae91f450aa9eb4b5ec5d4b2"
             )
         };
     }
@@ -1307,8 +1310,9 @@ Terminal=false
             await process.WaitForExitAsync();
             return process.ExitCode;
         }
-        catch
+        catch (Exception ex)
         {
+            Console.Error.WriteLine($"  Error running {command}: {ex.Message}");
             return -1;
         }
     }

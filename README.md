@@ -14,13 +14,13 @@ AppImage is a universal Linux package format that allows you to distribute appli
 ## Prerequisites
 
 1. **.NET 10 SDK** or later
-2. **appimagetool** - Download from [AppImageKit releases](https://github.com/AppImage/AppImageKit/releases)
+2. **appimagetool** - Download from [appimagetool releases](https://github.com/AppImage/appimagetool/releases)
 
 ### Installing appimagetool
 
 ```bash
 # Download
-wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
 
 # Make executable
 chmod +x appimagetool-x86_64.AppImage
