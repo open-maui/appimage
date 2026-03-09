@@ -10,7 +10,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>openmaui-appimage</ToolCommandName>
     <PackageId>OpenMaui.AppImage</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Authors>MarketAlly Pte Ltd, David H. Friedel Jr.</Authors>
     <Description>CLI tool to package .NET MAUI Linux apps as AppImages</Description>
     <PackageProjectUrl>https://github.com/open-maui/appimage</PackageProjectUrl>

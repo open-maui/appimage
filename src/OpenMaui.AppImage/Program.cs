@@ -601,8 +601,10 @@ X-AppImage-Version={options.Version}
         // Set ARCH environment variable
         var arch = Environment.GetEnvironmentVariable("ARCH") ?? "x86_64";
 
-        var result = await RunCommandAsync(appImageTool, $"\"{appDir}\" \"{outputPath}\"",
-            new Dictionary<string, string> { ["ARCH"] = arch });
+        // Use --appimage-extract-and-run so appimagetool works without FUSE (e.g., CI runners, containers)
+        var envVars = new Dictionary<string, string> { ["ARCH"] = arch };
+        var result = await RunCommandAsync(appImageTool, $"--appimage-extract-and-run \"{appDir}\" \"{outputPath}\"",
+            envVars);
 
         if (result == 0)
         {
