@@ -601,10 +601,22 @@ X-AppImage-Version={options.Version}
         // Set ARCH environment variable
         var arch = Environment.GetEnvironmentVariable("ARCH") ?? "x86_64";
 
-        // Use --appimage-extract-and-run so appimagetool works without FUSE (e.g., CI runners, containers)
         var envVars = new Dictionary<string, string> { ["ARCH"] = arch };
-        var result = await RunCommandAsync(appImageTool, $"--appimage-extract-and-run \"{appDir}\" \"{outputPath}\"",
-            envVars);
+
+        // appimagetool is itself distributed as an AppImage, so on hosts without a
+        // usable /dev/fuse (LXC containers, minimal CI images) it can't mount itself
+        // and hangs or fails. When FUSE isn't available we tell the AppImage runtime
+        // to extract-and-run instead. We set the ENV VAR rather than passing the
+        // --appimage-extract-and-run FLAG: the AppImage runtime honors the env var,
+        // and a distro-packaged (native ELF) appimagetool simply ignores it —
+        // whereas the flag would be an unknown argument that breaks the native tool.
+        if (!IsFuseAvailable())
+        {
+            envVars["APPIMAGE_EXTRACT_AND_RUN"] = "1";
+            Console.WriteLine("  No usable /dev/fuse detected — running appimagetool in extract-and-run mode.");
+        }
+
+        var result = await RunCommandAsync(appImageTool, $"\"{appDir}\" \"{outputPath}\"", envVars);
 
         if (result == 0)
         {
@@ -614,6 +626,30 @@ X-AppImage-Version={options.Version}
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Whether FUSE is usable on this host. Needed to *mount* an AppImage-packaged
+    /// appimagetool; absent in most LXC containers and minimal CI images. Probes the
+    /// /dev/fuse device (existence + openability, since some images expose the node
+    /// but deny it without CAP_SYS_ADMIN). Any uncertainty returns false so the
+    /// caller falls back to the always-safe extract-and-run path.
+    /// </summary>
+    private static bool IsFuseAvailable()
+    {
+        if (!OperatingSystem.IsLinux())
+            return false;
+        try
+        {
+            if (!File.Exists("/dev/fuse"))
+                return false;
+            using var fs = new FileStream("/dev/fuse", FileMode.Open, FileAccess.ReadWrite);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private string? AutoDetectExecutable(string inputDir, string appName)
