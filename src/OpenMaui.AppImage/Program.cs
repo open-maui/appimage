@@ -58,6 +58,14 @@ class Program
             aliases: new[] { "--app-id" },
             description: "Application ID for Flatpak (e.g., com.example.MyApp)");
 
+        var appDirOption = new Option<bool>(
+            aliases: new[] { "--appdir" },
+            description: "Treat --input as a pre-structured AppDir / FHS tree (e.g. a directory extracted from a .deb: usr/bin, usr/lib, usr/share) rather than a flat publish dir. The tree becomes the AppDir root and the executable is resolved under usr/bin. Ideal for wrapping apps whose bundler already lays out an FHS tree (Tauri, Electron, deb packages).");
+
+        var noFuseOption = new Option<bool>(
+            aliases: new[] { "--no-fuse" },
+            description: "Never use FUSE for appimagetool — always run it in extract-and-run mode. By default FUSE is auto-detected and only bypassed when /dev/fuse is missing; use this when FUSE is present but broken (misconfigured containers, missing libfuse2) so detection would wrongly try to mount.");
+
         rootCommand.AddOption(inputOption);
         rootCommand.AddOption(outputOption);
         rootCommand.AddOption(nameOption);
@@ -68,6 +76,8 @@ class Program
         rootCommand.AddOption(commentOption);
         rootCommand.AddOption(formatOption);
         rootCommand.AddOption(appIdOption);
+        rootCommand.AddOption(appDirOption);
+        rootCommand.AddOption(noFuseOption);
 
         rootCommand.SetHandler(async (context) =>
         {
@@ -81,6 +91,8 @@ class Program
             var comment = context.ParseResult.GetValueForOption(commentOption);
             var format = context.ParseResult.GetValueForOption(formatOption)!.ToLowerInvariant();
             var appId = context.ParseResult.GetValueForOption(appIdOption);
+            var preBuiltAppDir = context.ParseResult.GetValueForOption(appDirOption);
+            var noFuse = context.ParseResult.GetValueForOption(noFuseOption);
 
             var options = new PackageOptions
             {
@@ -92,7 +104,9 @@ class Program
                 Category = category,
                 Version = version,
                 Comment = comment ?? $"{name} - Built with OpenMaui",
-                AppId = appId
+                AppId = appId,
+                PreBuiltAppDir = preBuiltAppDir,
+                NoFuse = noFuse
             };
 
             bool result;
@@ -125,6 +139,21 @@ public record PackageOptions
     public required string Version { get; init; }
     public required string Comment { get; init; }
     public string? AppId { get; init; }  // For Flatpak
+
+    /// <summary>
+    /// When true, <see cref="InputDirectory"/> is already a structured AppDir/FHS
+    /// tree (usr/bin, usr/lib, …), e.g. extracted from a .deb — use it as the AppDir
+    /// root and resolve the executable under usr/bin, instead of copying a flat
+    /// publish dir into usr/bin.
+    /// </summary>
+    public bool PreBuiltAppDir { get; init; }
+
+    /// <summary>
+    /// Force appimagetool to run in extract-and-run mode instead of FUSE-mounting,
+    /// regardless of whether /dev/fuse looks available. For hosts where FUSE is
+    /// present but broken.
+    /// </summary>
+    public bool NoFuse { get; init; }
 }
 
 public class AppImageBuilder
@@ -142,13 +171,26 @@ public class AppImageBuilder
             return false;
         }
 
+        // Directory that actually holds the executable: for a pre-built AppDir
+        // (e.g. an extracted .deb) that's <input>/usr/bin; for a flat publish dir
+        // it's the input directory itself.
+        var appFilesDir = options.PreBuiltAppDir
+            ? Path.Combine(options.InputDirectory.FullName, "usr", "bin")
+            : options.InputDirectory.FullName;
+
+        if (options.PreBuiltAppDir && !Directory.Exists(appFilesDir))
+        {
+            Console.Error.WriteLine($"Error: --appdir was given but {appFilesDir} does not exist. Expected an FHS tree (usr/bin/...).");
+            return false;
+        }
+
         // Find the main executable
         var execName = options.ExecutableName;
 
         // Auto-detect executable if not specified
         if (string.IsNullOrEmpty(execName))
         {
-            execName = AutoDetectExecutable(options.InputDirectory.FullName, options.AppName);
+            execName = AutoDetectExecutable(appFilesDir, options.AppName);
             if (execName != null)
             {
                 Console.WriteLine($"  Auto-detected executable: {execName}");
@@ -161,7 +203,7 @@ public class AppImageBuilder
             execName = options.AppName;
         }
 
-        var mainExec = Path.Combine(options.InputDirectory.FullName, execName);
+        var mainExec = Path.Combine(appFilesDir, execName);
         if (!File.Exists(mainExec))
         {
             // Try with common variations
@@ -169,8 +211,8 @@ public class AppImageBuilder
             {
                 mainExec,
                 mainExec + ".dll",
-                Path.Combine(options.InputDirectory.FullName, execName.Replace(" ", "")),
-                Path.Combine(options.InputDirectory.FullName, execName.Replace(" ", "") + ".dll")
+                Path.Combine(appFilesDir, execName.Replace(" ", "")),
+                Path.Combine(appFilesDir, execName.Replace(" ", "") + ".dll")
             };
 
             var found = candidates.FirstOrDefault(File.Exists);
@@ -183,12 +225,12 @@ public class AppImageBuilder
             else
             {
                 // List available executables
-                var dlls = Directory.GetFiles(options.InputDirectory.FullName, "*.dll")
+                var dlls = Directory.GetFiles(appFilesDir, "*.dll")
                     .Select(Path.GetFileNameWithoutExtension)
                     .Take(10)
                     .ToList();
 
-                Console.Error.WriteLine($"Error: Could not find executable '{execName}' in {options.InputDirectory.FullName}");
+                Console.Error.WriteLine($"Error: Could not find executable '{execName}' in {appFilesDir}");
                 Console.Error.WriteLine($"Available DLLs: {string.Join(", ", dlls)}");
                 Console.Error.WriteLine("Use --executable to specify the correct name.");
                 return false;
@@ -217,7 +259,17 @@ public class AppImageBuilder
 
             // Copy application files
             Console.WriteLine("  Copying application files...");
-            CopyDirectory(options.InputDirectory.FullName, Path.Combine(appDir, "usr", "bin"));
+            if (options.PreBuiltAppDir)
+            {
+                // Input is already an FHS tree (usr/bin, usr/lib, usr/share, …) — use
+                // it directly as the AppDir root so resources under usr/lib/usr/share
+                // are preserved. AppRun still execs $HERE/usr/bin/$EXEC_NAME.
+                CopyDirectory(options.InputDirectory.FullName, appDir);
+            }
+            else
+            {
+                CopyDirectory(options.InputDirectory.FullName, Path.Combine(appDir, "usr", "bin"));
+            }
 
             // Note: Using zenity for installer dialog (no bundled installer needed)
 
@@ -237,7 +289,7 @@ public class AppImageBuilder
 
             // Create the AppImage using appimagetool
             Console.WriteLine("  Creating AppImage...");
-            var success = await CreateAppImage(appDir, options.OutputFile.FullName);
+            var success = await CreateAppImage(appDir, options.OutputFile.FullName, options.NoFuse);
 
             if (success)
             {
@@ -572,7 +624,7 @@ X-AppImage-Version={options.Version}
         }
     }
 
-    private async Task<bool> CreateAppImage(string appDir, string outputPath)
+    private async Task<bool> CreateAppImage(string appDir, string outputPath, bool noFuse = false)
     {
         // Ensure output directory exists
         var outputDir = Path.GetDirectoryName(outputPath);
@@ -610,10 +662,12 @@ X-AppImage-Version={options.Version}
         // --appimage-extract-and-run FLAG: the AppImage runtime honors the env var,
         // and a distro-packaged (native ELF) appimagetool simply ignores it —
         // whereas the flag would be an unknown argument that breaks the native tool.
-        if (!IsFuseAvailable())
+        if (noFuse || !IsFuseAvailable())
         {
             envVars["APPIMAGE_EXTRACT_AND_RUN"] = "1";
-            Console.WriteLine("  No usable /dev/fuse detected — running appimagetool in extract-and-run mode.");
+            Console.WriteLine(noFuse
+                ? "  --no-fuse set — running appimagetool in extract-and-run mode."
+                : "  No usable /dev/fuse detected — running appimagetool in extract-and-run mode.");
         }
 
         var result = await RunCommandAsync(appImageTool, $"\"{appDir}\" \"{outputPath}\"", envVars);
