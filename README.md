@@ -4,10 +4,14 @@ AppImage is a universal Linux package format that allows you to distribute appli
 
 ## Features
 
+- **One-command packaging** with `--project` — the tool runs `dotnet publish` itself and packages the result
 - Package any .NET MAUI Linux app as an AppImage
 - **Package a `.deb` or existing AppDir** with `--appdir` — turn any FHS tree (Tauri, Electron, deb packages) into an AppImage, no `linuxdeploy` required
+- **appimagetool auto-fetch** — downloads and caches the official release when it isn't installed (`--no-fetch` to forbid network)
 - **Works in CI / containers without FUSE** — auto-detects a missing `/dev/fuse` and runs `appimagetool` in extract-and-run mode
-- **Auto-detection** of executable and icon from your project
+- **Auto-detection** of executable, icon, name, and version from your project
+- **Host dependency intelligence** — prints the native libraries the target machine needs (GStreamer, webkit2gtk, …), and `--host-deps-check` adds a friendly launch-time check to the AppImage
+- **Self-updating AppImages** (`--update-info`), **GPG signing** (`--sign`), and **AppStream metainfo** (`--metainfo`)
 - Automatic `.desktop` file generation with proper `StartupWMClass` for taskbar integration
 - Built-in installer dialog on first run
 - Install/Reinstall/Uninstall support
@@ -16,9 +20,7 @@ AppImage is a universal Linux package format that allows you to distribute appli
 ## Prerequisites
 
 1. **.NET 10 SDK** or later
-2. **appimagetool** - Download from [appimagetool releases](https://github.com/AppImage/appimagetool/releases)
-
-### Installing appimagetool
+2. **appimagetool** — *optional*: when it isn't found on the host, the tool automatically downloads the [official continuous release](https://github.com/AppImage/appimagetool/releases) into `~/.cache/openmaui-appimage/` and reuses it on later runs. A clear notice with the download URL is printed on first download (the continuous tag publishes no reliable checksum). Pass `--no-fetch` to forbid network access and install it yourself:
 
 ```bash
 # Download
@@ -49,23 +51,32 @@ dotnet build
 
 ## Usage
 
-### 1. Publish your MAUI app
+### Quick Start — one command
+
+```bash
+openmaui-appimage --project ./MyApp
+```
+
+That's it. The tool:
+1. Resolves the `.csproj` (a project directory or the file itself)
+2. Runs `dotnet publish -c Release -r linux-x64 --self-contained true` (RID matches the host; override with `--rid`)
+3. Derives `--name` from the csproj (`AssemblyName` or file name) and `--app-version` from its `Version` property
+4. Packages the publish output as `<Name>.AppImage`
+5. Prints a **Host runtime dependencies** report for the target machines
+
+### Manual flow (pre-published apps)
 
 ```bash
 cd YourMauiApp
 dotnet publish -c Release -r linux-x64 --self-contained
-```
 
-### 2. Create the AppImage
-
-```bash
 openmaui-appimage \
     --input bin/Release/net10.0/linux-x64/publish \
     --output YourApp.AppImage \
     --name "Your App"
 ```
 
-That's it! The tool automatically detects:
+Either way, the tool automatically detects:
 - **Executable**: Finds the main executable (ELF binary or .runtimeconfig.json)
 - **Icon**: Reads `MauiIcon` from your `.csproj` and composites background + foreground
 
@@ -73,16 +84,26 @@ That's it! The tool automatically detects:
 
 | Option | Short | Required | Description |
 |--------|-------|----------|-------------|
-| `--input` | `-i` | Yes | Path to published .NET app directory |
-| `--output` | `-o` | Yes | Output AppImage file path |
-| `--name` | `-n` | Yes | Application name |
+| `--input` | `-i` | Yes* | Path to published .NET app directory (*or use `--project`) |
+| `--project` | `-p` | Yes* | Path to a `.csproj` (or a directory containing one); the tool publishes it itself. Mutually exclusive with `--input`. |
+| `--rid` | | No | RID for `dotnet publish` with `--project` (default: host arch, e.g. `linux-x64`) |
+| `--output` | `-o` | With `--input` | Output AppImage file path (defaults to `<Name>.AppImage` with `--project`) |
+| `--name` | `-n` | With `--input` | Application name (derived from the csproj with `--project`) |
 | `--executable` | `-e` | No | Main executable name (auto-detected if not specified) |
 | `--icon` | | No | Path to icon (auto-detected from MauiIcon if not specified) |
 | `--category` | `-c` | No | Desktop category (default: Utility) |
-| `--app-version` | | No | App version (default: 1.0.0) |
+| `--app-version` | | No | App version (default: 1.0.0, or the csproj `Version` with `--project`) |
 | `--comment` | | No | App description |
+| `--app-id` | | No | Reverse-DNS application id (e.g. `com.example.MyApp`), used for Flatpak and `--metainfo` |
 | `--appdir` | | No | Treat `--input` as a pre-structured AppDir / FHS tree (e.g. a directory extracted from a `.deb`: `usr/bin`, `usr/lib`, `usr/share`) instead of a flat publish dir. See [Packaging a .deb or existing AppDir](#packaging-a-deb-or-existing-appdir). |
 | `--no-fuse` | | No | Always run `appimagetool` in extract-and-run mode instead of FUSE-mounting. FUSE is auto-detected by default; use this when FUSE is present but broken. |
+| `--no-fetch` | | No | Forbid network access: never auto-download `appimagetool` |
+| `--host-deps-check` | | No | Inject a launch-time host-library check into AppRun. See [Host runtime dependencies](#host-runtime-dependencies). |
+| `--update-info` | | No | appimagetool update information (`-u`) for zsync self-updating AppImages. See [Self-updating AppImages](#self-updating-appimages-zsync). |
+| `--sign` | | No | GPG-sign the AppImage (appimagetool `--sign`) |
+| `--sign-key` | | No | GPG key id to sign with (implies `--sign`) |
+| `--metainfo` | | No | Generate AppStream metainfo.xml. See [AppStream metainfo](#appstream-metainfo). |
+| `--developer` | | No | Developer name for the AppStream metainfo |
 
 ### Desktop Categories
 
@@ -128,16 +149,88 @@ Once installed, clicking the app in your application menu runs it directly (no d
 ## Example: Packaging ShellDemo
 
 ```bash
-# Build and publish
+# One command — publish + package
+openmaui-appimage --project maui-linux-samples/ShellDemo
+
+# Or the manual flow
 cd maui-linux-samples/ShellDemo
 dotnet publish -c Release -r linux-x64 --self-contained
-
-# Create AppImage (icon auto-detected from MauiIcon in csproj)
 openmaui-appimage \
     -i bin/Release/net10.0/linux-x64/publish \
     -o ShellDemo.AppImage \
     -n "Shell Demo"
 ```
+
+## Host runtime dependencies
+
+AppImages bundle your app but not the host's system libraries. After packaging, the
+tool scans the publish tree for OpenMaui feature assemblies and prints a concise
+**Host runtime dependencies** report — what the *target* machine needs:
+
+- `OpenMaui.Controls.Linux.dll` → required base set: **libX11**, **libwayland-client**,
+  **fontconfig**; plus optional, feature-gated libraries: **libcups** (printing),
+  **libayatana-appindicator3**/**libappindicator3** (tray icon), **webkit2gtk-4.1** (WebView)
+- `OpenMaui.Controls.Linux.MediaElement.dll` → **GStreamer 1.x** + base/good plugins
+- `OpenMaui.Controls.Linux.Maps.dll` → nothing native (network access only)
+
+Each entry lists the Fedora (`dnf`) and Debian/Ubuntu (`apt`) package names.
+
+### `--host-deps-check` — launch-time check
+
+Pass `--host-deps-check` to inject a small, dependency-free POSIX-sh block into the
+generated `AppRun`. At launch it probes the needed sonames via `ldconfig -p`:
+
+- **Required base set missing** → shows a friendly message (zenity or kdialog when
+  available, stderr otherwise) listing the exact `dnf`/`apt` install commands, then aborts
+- **Optional feature libraries missing** → prints a note to stderr and continues
+  (the corresponding features are simply unavailable)
+
+```bash
+openmaui-appimage --project ./MyApp --host-deps-check
+```
+
+## Self-updating AppImages (zsync)
+
+Pass `--update-info` to embed update information (appimagetool `-u`), producing a
+`.zsync` file next to the AppImage. Tools like `AppImageUpdate` can then update the
+app by downloading only the changed blocks. The common shape for GitHub releases is:
+
+```bash
+openmaui-appimage --project ./MyApp \
+    --update-info "gh-releases-zsync|myuser|myrepo|latest|MyApp-*.AppImage.zsync"
+```
+
+Upload both the produced `.AppImage` and `.zsync` files to your release.
+
+## Signing
+
+```bash
+# Sign with your default GPG key
+openmaui-appimage --project ./MyApp --sign
+
+# Sign with a specific key (implies --sign)
+openmaui-appimage --project ./MyApp --sign-key ABCDEF1234567890
+```
+
+These are passed straight through to appimagetool (`--sign` / `--sign-key`), which
+embeds a GPG signature into the AppImage.
+
+## AppStream metainfo
+
+`--metainfo` generates a minimal, valid AppStream file at
+`AppDir/usr/share/metainfo/<app-id>.metainfo.xml` (component
+`type="desktop-application"`, with `launchable`, `provides/binary`, and the summary
+from `--comment`), which app stores and software centers read:
+
+```bash
+openmaui-appimage --project ./MyApp --metainfo \
+    --app-id com.example.MyApp \
+    --comment "A great app" \
+    --developer "Example Inc."
+```
+
+The `--app-id` should be reverse-DNS (`com.example.MyApp`); the tool warns when it
+isn't, and derives a `com.openmaui.*` fallback id when the option is omitted.
 
 ## Packaging a .deb or existing AppDir
 
@@ -216,7 +309,9 @@ dotnet publish -c Release -r linux-x64 --self-contained false
 ## Troubleshooting
 
 ### "appimagetool not found"
-Install appimagetool as described in Prerequisites.
+By default the tool downloads appimagetool automatically (cached in
+`~/.cache/openmaui-appimage/`). If you passed `--no-fetch` or the download failed,
+install it as described in Prerequisites.
 
 ### "Could not find executable"
 The auto-detection looks for:
@@ -254,6 +349,20 @@ sudo dnf install fuse fuse-libs  # Fedora
 # or, no FUSE needed:
 ./YourApp.AppImage --appimage-extract-and-run
 ```
+
+## Development
+
+```bash
+# Build the solution
+dotnet build
+
+# Run the tests
+dotnet test
+```
+
+The CLI lives in `src/OpenMaui.AppImage` (`Program.cs` is the entry point,
+`Commands/` holds the command definition, `Core/` the packaging logic), with unit
+tests in `tests/OpenMaui.AppImage.Tests`.
 
 ## License
 
