@@ -202,6 +202,9 @@ DESKTOP
     # Update desktop database and icon cache
     command -v update-desktop-database &> /dev/null && update-desktop-database ""$APPS_DIR"" 2>/dev/null
     command -v gtk-update-icon-cache &> /dev/null && gtk-update-icon-cache -f -t ""$HOME/.local/share/icons/hicolor"" 2>/dev/null
+    # KDE Plasma keeps its own icon cache that ignores gtk-update-icon-cache;
+    # Qt's icon loader rescans when theme directory mtimes change, so bump them.
+    touch ""$HOME/.local/share/icons/hicolor"" ""$ICONS_DIR_SCALABLE"" ""$ICONS_DIR_256"" 2>/dev/null
 
     return 0
 }}
