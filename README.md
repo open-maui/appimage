@@ -1,3 +1,15 @@
+# OpenMaui.AppImage
+
+Package .NET MAUI Linux apps as universal AppImages — one command from csproj to distributable.
+
+[![NuGet](https://img.shields.io/nuget/v/OpenMaui.AppImage)](https://www.nuget.org/packages/OpenMaui.AppImage)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/OpenMaui.AppImage)](https://www.nuget.org/packages/OpenMaui.AppImage)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE.md)
+[![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/)
+[![GitHub](https://img.shields.io/badge/GitHub-open--maui-181717?logo=github)](https://github.com/open-maui/appimage)
+
+**Developed by [MarketAlly Pte Ltd](https://marketally.ai)**
+
 > **AI assistants / automation:** follow [docs/PACKAGING-GUIDE.md](docs/PACKAGING-GUIDE.md) —
 > a self-contained, copy-paste-exact reference (commands, options, recipes,
 > verification, troubleshooting) intended to be consumed verbatim.
