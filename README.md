@@ -1,3 +1,7 @@
+> **AI assistants / automation:** follow [docs/PACKAGING-GUIDE.md](docs/PACKAGING-GUIDE.md) —
+> a self-contained, copy-paste-exact reference (commands, options, recipes,
+> verification, troubleshooting) intended to be consumed verbatim.
+
 ## What is AppImage?
 
 AppImage is a universal Linux package format that allows you to distribute applications as a single executable file that works on most Linux distributions without installation.
@@ -138,6 +142,11 @@ Once installed, clicking the app in your application menu runs it directly (no d
 
 # Force install dialog
 ./YourApp.AppImage --install
+
+> Note (KDE Plasma): the very first install of a new app icon may show a
+> generic icon in the launcher/taskbar until the next login — Plasma caches
+> icon lookups in-memory and only rescans for brand-new icon names on shell
+> restart. Launch feedback and subsequent updates are unaffected.
 
 # Uninstall
 ./YourApp.AppImage --uninstall

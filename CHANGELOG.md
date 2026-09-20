@@ -14,10 +14,12 @@ All notable changes to OpenMaui.AppImage will be documented in this file.
 - **`--host-deps-check`.** Injects a small POSIX-sh probe into the generated AppRun: at launch, missing required libraries produce a friendly message (zenity/kdialog when available, stderr otherwise) with exact `dnf`/`apt` install commands and abort; missing feature-gated libraries only warn. Injected only when OpenMaui assemblies are detected.
 - **Self-updating AppImages.** `--update-info <string>` embeds zsync update information via appimagetool `-u` (e.g. the `gh-releases-zsync|user|repo|latest|*.AppImage.zsync` shape).
 - **Signing.** `--sign` (and `--sign-key <keyid>`, which implies `--sign`) pass through to appimagetool's GPG signing.
+- **Right-click Uninstall.** The installed launcher entry now carries a desktop action, so right-clicking the app in the menu/taskbar offers "Uninstall <App>" directly (runs the AppImage's `--uninstall` flow).
 - **AppStream metadata.** `--metainfo` generates `usr/share/metainfo/<app-id>.metainfo.xml` (desktop-application component, launchable, provides, optional `--developer`) for software-center listings; the app id is validated as reverse-DNS with a warning otherwise.
 
 ### Changed
 
+- Install refreshes icon caches more aggressively (theme-directory mtime bump for Qt's loader) and the completion dialog notes KDE Plasma's first-install icon-cache behavior (a brand-new icon name may render generic until next login; Plasma-internal, not fixable by an installer).
 - Bundled .NET runtime for Flatpak packaging updated 10.0.3 to 10.0.12 (both architectures, official checksums).
 - Internal restructure: the single-file tool is now `Commands/` + `Core/` (AppDirBuilder, AppImagePacker, FlatpakPacker, ProjectPublisher, DependencyScanner, AppStreamGenerator, AppImageToolFetcher, ProcessRunner) with an identical CLI surface.
 - New test suite: 103 tests covering desktop-file/AppRun generation, argument validation, FUSE detection, publish argument construction and csproj derivation, dependency scanning, the AppRun check block, AppStream generation, and packer argument passthrough.
