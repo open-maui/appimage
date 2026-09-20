@@ -43,6 +43,9 @@ publish/
 
 # AppImage artifacts
 *.AppImage
+# ...but not directories named *.AppImage (src/OpenMaui.AppImage matched the artifact pattern
+# above, silently ignoring every NEW source file added under it)
+!*.AppImage/
 *.AppDir/
 
 # Flatpak build artifacts
