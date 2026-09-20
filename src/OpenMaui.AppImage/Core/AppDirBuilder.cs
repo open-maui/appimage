@@ -194,6 +194,11 @@ Categories=$APPIMAGE_CATEGORY;
 Terminal=false
 StartupWMClass=$WM_CLASS
 X-AppImage-Version=$APPIMAGE_VERSION
+Actions=Uninstall;
+
+[Desktop Action Uninstall]
+Name=Uninstall $APPIMAGE_NAME
+Exec=$BIN_DIR/$APPIMAGE_BASENAME --uninstall
 DESKTOP
 
     # Mark as installed
@@ -238,7 +243,7 @@ if [ -n ""$APPIMAGE"" ]; then
             if [ $ZENITY_EXIT -eq 0 ]; then
                 do_install
                 zenity --info --title=""Installation Complete"" \
-                    --text=""$APPIMAGE_NAME has been installed.\n\nYou can find it in your application menu."" \
+                    --text=""$APPIMAGE_NAME has been installed.\n\nYou can find it in your application menu.\n\nNote: on KDE Plasma the icon may appear generic until your next login (Plasma caches icons; first install of a new icon only)."" \
                     --width=300 $ICON_OPT 2>/dev/null
             elif [ $ZENITY_EXIT -ne 1 ]; then
                 exit 0
@@ -312,7 +317,7 @@ if [ -n ""$APPIMAGE"" ]; then
             if [ $ZENITY_EXIT -eq 0 ]; then
                 do_install
                 zenity --info --title=""Installation Complete"" \
-                    --text=""$APPIMAGE_NAME has been installed.\n\nYou can find it in your application menu."" \
+                    --text=""$APPIMAGE_NAME has been installed.\n\nYou can find it in your application menu.\n\nNote: on KDE Plasma the icon may appear generic until your next login (Plasma caches icons; first install of a new icon only)."" \
                     --width=300 $ICON_OPT 2>/dev/null
             elif [ $ZENITY_EXIT -ne 1 ]; then
                 exit 0
