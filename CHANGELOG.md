@@ -2,7 +2,7 @@
 
 All notable changes to OpenMaui.AppImage will be documented in this file.
 
-## [1.2.0] - unreleased
+## [1.2.2] - unreleased
 
 > From packager to distribution tool: one-command packaging, automatic tooling, host-dependency intelligence, and release polish (self-update, signing, AppStream). Internally restructured with a full test suite.
 
