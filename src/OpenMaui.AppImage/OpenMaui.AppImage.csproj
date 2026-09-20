@@ -10,10 +10,11 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>openmaui-appimage</ToolCommandName>
     <PackageId>OpenMaui.AppImage</PackageId>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
     <Authors>MarketAlly Pte Ltd, David H. Friedel Jr.</Authors>
-    <Description>CLI tool to package .NET MAUI Linux apps as AppImages</Description>
+    <Description>CLI tool to package .NET MAUI Linux (OpenMaui) apps as AppImages or Flatpaks. One command from csproj to AppImage: openmaui-appimage --project ./MyApp. Includes host-dependency checks, zsync self-update, GPG signing, and AppStream metadata. Full usage guide (written for humans and AI assistants): https://github.com/open-maui/appimage/blob/main/docs/PACKAGING-GUIDE.md</Description>
     <PackageProjectUrl>https://github.com/open-maui/appimage</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>maui;linux;appimage;packaging</PackageTags>
   </PropertyGroup>
@@ -27,4 +28,7 @@
     <EmbeddedResource Include="../../templates/**/*" LinkBase="templates" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 </Project>
