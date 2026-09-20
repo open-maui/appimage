@@ -20,7 +20,7 @@ public class DependencyScannerTests
 
         var optional = result.Dependencies.Where(d => !d.Required).ToList();
         Assert.Contains(optional, d => d.Sonames.Contains("libcups.so.2") && d.Feature == "printing");
-        Assert.Contains(optional, d => d.Sonames.Contains("libwebkit2gtk-4.1.so.0") && d.Feature == "WebView");
+        Assert.Contains(optional, d => d.Sonames.Contains("libwebkit2gtk-4.1.so.0") && d.Feature!.StartsWith("WebView"));
         // Tray accepts either ayatana or legacy appindicator
         Assert.Contains(optional, d =>
             d.Sonames.Contains("libayatana-appindicator3.so.1") &&
@@ -118,5 +118,45 @@ public class DependencyScannerTests
         var report = DependencyScanner.FormatReport(DependencyScanner.Map(Set("MyApp.dll")));
 
         Assert.Contains("Host runtime dependencies: none detected", report);
+    }
+
+    [Fact]
+    public void Base_Assembly_Lists_Wpe_As_Optional_WebView_With_Fedora_Copr_Hint()
+    {
+        var result = DependencyScanner.Map(Set(DependencyScanner.BaseAssembly));
+
+        var wpe = Assert.Single(result.Dependencies, d => d.Sonames.Contains("libWPEWebKit-2.0.so.1"));
+        Assert.False(wpe.Required);
+        Assert.Contains("WebView", wpe.Feature);
+        Assert.Equal("wpewebkit", wpe.FedoraPackages);
+        Assert.Equal("libwpewebkit-2.0-1", wpe.DebianPackages);
+        Assert.Equal(DependencyScanner.WpeFedoraHint, wpe.FedoraHint);
+
+        // WebKitGTK stays listed as the GTK-mode fallback.
+        Assert.Contains(result.Dependencies, d => d.Sonames.Contains("libwebkit2gtk-4.1.so.0") && !d.Required);
+
+        var report = DependencyScanner.FormatReport(result);
+        Assert.Contains("philn/wpewebkit", report);
+    }
+
+    [Fact]
+    public void Blazor_Assembly_Promotes_Wpe_To_Required()
+    {
+        var result = DependencyScanner.Map(Set(DependencyScanner.BaseAssembly, DependencyScanner.BlazorAssembly));
+
+        Assert.Contains(DependencyScanner.BlazorAssembly, result.DetectedAssemblies);
+        var wpe = Assert.Single(result.Dependencies, d => d.Sonames.Contains("libWPEWebKit-2.0.so.1"));
+        Assert.True(wpe.Required);
+        Assert.Equal("BlazorWebView", wpe.Feature);
+        Assert.Contains(result.Notes, n => n.Contains("BlazorWebView"));
+
+        var report = DependencyScanner.FormatReport(result);
+        Assert.Contains("Fedora first:      " + DependencyScanner.WpeFedoraHint, report);
+        Assert.Contains("sudo dnf install", report);
+
+        var block = DependencyScanner.GenerateAppRunCheckBlock(result.Dependencies);
+        Assert.Contains("libWPEWebKit-2.0.so.1", block);
+        Assert.Contains("OM_REQ_HINT", block);
+        Assert.Contains("philn/wpewebkit", block);
     }
 }

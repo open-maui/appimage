@@ -2,7 +2,7 @@
 
 Reference for packaging a .NET MAUI Linux (OpenMaui) application as an AppImage.
 Written to be followed verbatim by a human or an AI coding assistant working
-inside a consumer project. Every command is copy-paste exact. Version: tool 1.2.0.
+inside a consumer project. Every command is copy-paste exact. Version: tool 1.2.3.
 
 ## TL;DR — the golden path
 
@@ -113,8 +113,14 @@ AppImages bundle the app and .NET, NOT desktop system libraries. After packaging
 the tool prints a "Host runtime dependencies" report for OpenMaui apps:
 required (libX11, libwayland-client, fontconfig — present on any desktop distro)
 and feature-gated (GStreamer for MediaElement, libcups for printing,
-libayatana-appindicator for tray icons, webkit2gtk-4.1 for WebView), with
-Fedora and Debian package names.
+libayatana-appindicator for tray icons, WPE WebKit 2.54+ for the WebView in
+native mode with webkit2gtk-4.1 as the GTK-mode fallback), with Fedora and
+Debian package names. An app that ships `OpenMaui.Controls.Linux.Blazor`
+(BlazorWebView) makes WPE WebKit a required dependency.
+
+WPE on Fedora is not in the official repositories; the report and the launch-time
+check print the extra step: `sudo dnf copr enable philn/wpewebkit` before
+`sudo dnf install wpewebkit`. Debian/Ubuntu: `sudo apt install libwpewebkit-2.0-1`.
 
 `--host-deps-check` bakes a launch-time check into the AppImage: missing
 required libraries produce a dialog/stderr message with the exact

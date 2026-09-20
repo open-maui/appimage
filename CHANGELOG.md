@@ -2,7 +2,13 @@
 
 All notable changes to OpenMaui.AppImage will be documented in this file.
 
-## [1.2.2] - unreleased
+## [1.2.3] - 2026-09-20
+
+### Added
+
+- **WPE WebKit and BlazorWebView awareness.** The dependency report lists WPE WebKit 2.54+ (`libWPEWebKit-2.0.so.1`) as the WebView's native-mode engine with WebKitGTK as the GTK-mode fallback, and promotes WPE to a required dependency when `OpenMaui.Controls.Linux.Blazor` is present. Fedora ships no WPE packages, so the report, the `--host-deps-check` launch message and the install commands carry the extra step (`sudo dnf copr enable philn/wpewebkit`) alongside `dnf install wpewebkit`; Debian/Ubuntu use `libwpewebkit-2.0-1`.
+
+## [1.2.2] - 2026-09-19
 
 > From packager to distribution tool: one-command packaging, automatic tooling, host-dependency intelligence, and release polish (self-update, signing, AppStream). Internally restructured with a full test suite.
 
@@ -16,6 +22,7 @@ All notable changes to OpenMaui.AppImage will be documented in this file.
 - **Signing.** `--sign` (and `--sign-key <keyid>`, which implies `--sign`) pass through to appimagetool's GPG signing.
 - **Right-click Uninstall.** The installed launcher entry now carries a desktop action, so right-clicking the app in the menu/taskbar offers "Uninstall <App>" directly (runs the AppImage's `--uninstall` flow).
 - **AppStream metadata.** `--metainfo` generates `usr/share/metainfo/<app-id>.metainfo.xml` (desktop-application component, launchable, provides, optional `--developer`) for software-center listings; the app id is validated as reverse-DNS with a warning otherwise.
+
 
 ### Changed
 

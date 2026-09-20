@@ -11,13 +11,15 @@ namespace OpenMaui.AppImage.Core;
 /// <param name="Feature">The feature the dependency enables (null for the required core set).</param>
 /// <param name="FedoraPackages">Package name(s) on Fedora (dnf).</param>
 /// <param name="DebianPackages">Package name(s) on Debian/Ubuntu (apt).</param>
+/// <param name="FedoraHint">Extra Fedora step printed with the install command (for example enabling a COPR), or null.</param>
 public sealed record HostDependency(
     string DisplayName,
     string[] Sonames,
     bool Required,
     string? Feature,
     string FedoraPackages,
-    string DebianPackages);
+    string DebianPackages,
+    string? FedoraHint = null);
 
 public sealed record DependencyScanResult(
     IReadOnlyList<string> DetectedAssemblies,
@@ -34,6 +36,10 @@ public static class DependencyScanner
     public const string BaseAssembly = "OpenMaui.Controls.Linux.dll";
     public const string MediaElementAssembly = "OpenMaui.Controls.Linux.MediaElement.dll";
     public const string MapsAssembly = "OpenMaui.Controls.Linux.Maps.dll";
+    public const string BlazorAssembly = "OpenMaui.Controls.Linux.Blazor.dll";
+
+    /// <summary>Fedora ships no WPE packages; this COPR (maintained by an Igalia WPE developer) does.</summary>
+    public const string WpeFedoraHint = "sudo dnf copr enable philn/wpewebkit";
 
     /// <summary>Scans <paramref name="rootDir"/> recursively and maps found assemblies.</summary>
     public static DependencyScanResult Scan(string rootDir)
@@ -71,8 +77,22 @@ public static class DependencyScanner
                 Required: false, Feature: "printing", "cups-libs", "libcups2"));
             deps.Add(new HostDependency("appindicator", new[] { "libayatana-appindicator3.so.1", "libappindicator3.so.1" },
                 Required: false, Feature: "tray icon", "libayatana-appindicator-gtk3", "libayatana-appindicator3-1"));
+            // WebView: WPE WebKit (composited, native Wayland/X11 mode) is preferred;
+            // WebKitGTK is the fallback and only displays in GTK mode.
+            deps.Add(new HostDependency("WPE WebKit 2.54+", new[] { "libWPEWebKit-2.0.so.1" },
+                Required: false, Feature: "WebView (native mode)", "wpewebkit", "libwpewebkit-2.0-1", WpeFedoraHint));
             deps.Add(new HostDependency("webkit2gtk-4.1", new[] { "libwebkit2gtk-4.1.so.0" },
-                Required: false, Feature: "WebView", "webkit2gtk4.1", "libwebkit2gtk-4.1-0"));
+                Required: false, Feature: "WebView (GTK-mode fallback)", "webkit2gtk4.1", "libwebkit2gtk-4.1-0"));
+        }
+
+        if (assemblyFileNames.Contains(BlazorAssembly))
+        {
+            detected.Add(BlazorAssembly);
+            // BlazorWebView runs only on WPE: promote it from feature-gated to required.
+            deps.RemoveAll(d => d.Sonames.Contains("libWPEWebKit-2.0.so.1"));
+            deps.Add(new HostDependency("WPE WebKit 2.54+", new[] { "libWPEWebKit-2.0.so.1" },
+                Required: true, Feature: "BlazorWebView", "wpewebkit", "libwpewebkit-2.0-1", WpeFedoraHint));
+            notes.Add("BlazorWebView (OpenMaui.Controls.Linux.Blazor) requires WPE WebKit on the host; the WebKitGTK fallback does not apply.");
         }
 
         if (assemblyFileNames.Contains(MediaElementAssembly))
@@ -92,6 +112,8 @@ public static class DependencyScanner
 
         return new DependencyScanResult(detected, deps, notes);
     }
+
+    private static string HintSuffix(HostDependency d) => d.FedoraHint == null ? "" : $" (first: {d.FedoraHint})";
 
     /// <summary>Concise "Host runtime dependencies" report printed after packaging.</summary>
     public static string FormatReport(DependencyScanResult result)
@@ -113,14 +135,14 @@ public static class DependencyScanner
         {
             sb.AppendLine("  Required:");
             foreach (var d in required)
-                sb.AppendLine($"    {d.DisplayName} ({string.Join(" or ", d.Sonames)})  [Fedora: {d.FedoraPackages}] [Debian/Ubuntu: {d.DebianPackages}]");
+                sb.AppendLine($"    {d.DisplayName} ({string.Join(" or ", d.Sonames)})  [Fedora: {d.FedoraPackages}{HintSuffix(d)}] [Debian/Ubuntu: {d.DebianPackages}]");
         }
 
         if (optional.Count > 0)
         {
             sb.AppendLine("  Optional (feature-gated):");
             foreach (var d in optional)
-                sb.AppendLine($"    {d.DisplayName} - {d.Feature} ({string.Join(" or ", d.Sonames)})  [Fedora: {d.FedoraPackages}] [Debian/Ubuntu: {d.DebianPackages}]");
+                sb.AppendLine($"    {d.DisplayName} - {d.Feature} ({string.Join(" or ", d.Sonames)})  [Fedora: {d.FedoraPackages}{HintSuffix(d)}] [Debian/Ubuntu: {d.DebianPackages}]");
         }
 
         foreach (var note in result.Notes)
@@ -128,6 +150,8 @@ public static class DependencyScanner
 
         if (required.Count > 0)
         {
+            foreach (var hint in required.Where(d => d.FedoraHint != null).Select(d => d.FedoraHint!).Distinct())
+                sb.AppendLine($"  Fedora first:      {hint}");
             sb.AppendLine($"  Install required:  Fedora:        sudo dnf install {string.Join(" ", required.Select(d => d.FedoraPackages))}");
             sb.AppendLine($"                     Debian/Ubuntu: sudo apt install {string.Join(" ", required.Select(d => d.DebianPackages))}");
         }
@@ -150,6 +174,7 @@ public static class DependencyScanner
         sb.AppendLine("    om_has() { case \"$OM_LDCACHE\" in *\"$1\"*) return 0 ;; esac; return 1; }");
         sb.AppendLine("    OM_MISSING_REQ=\"\"");
         sb.AppendLine("    OM_MISSING_OPT=\"\"");
+        sb.AppendLine("    OM_REQ_HINT=\"\"");
         sb.AppendLine("    OM_REQ_DNF=\"\"");
         sb.AppendLine("    OM_REQ_APT=\"\"");
 
@@ -158,7 +183,8 @@ public static class DependencyScanner
             var probe = string.Join(" || ", dep.Sonames.Select(s => $"om_has \"{s}\""));
             if (dep.Required)
             {
-                sb.AppendLine($"    {probe} || {{ OM_MISSING_REQ=\"$OM_MISSING_REQ {dep.Sonames[0]}\"; OM_REQ_DNF=\"$OM_REQ_DNF {dep.FedoraPackages}\"; OM_REQ_APT=\"$OM_REQ_APT {dep.DebianPackages}\"; }}");
+                var hint = dep.FedoraHint == null ? "" : $" OM_REQ_HINT=\"$OM_REQ_HINT ({dep.FedoraHint})\";";
+                sb.AppendLine($"    {probe} || {{ OM_MISSING_REQ=\"$OM_MISSING_REQ {dep.Sonames[0]}\"; OM_REQ_DNF=\"$OM_REQ_DNF {dep.FedoraPackages}\"; OM_REQ_APT=\"$OM_REQ_APT {dep.DebianPackages}\";{hint} }}");
             }
             else
             {
@@ -170,7 +196,7 @@ public static class DependencyScanner
         sb.AppendLine("        OM_MSG=\"$APPIMAGE_NAME cannot start - missing required system libraries:$OM_MISSING_REQ");
         sb.AppendLine();
         sb.AppendLine("Install them with:");
-        sb.AppendLine("  Fedora:        sudo dnf install$OM_REQ_DNF");
+        sb.AppendLine("  Fedora:        sudo dnf install$OM_REQ_DNF$OM_REQ_HINT");
         sb.AppendLine("  Debian/Ubuntu: sudo apt install$OM_REQ_APT\"");
         sb.AppendLine("        if command -v zenity >/dev/null 2>&1; then");
         sb.AppendLine("            zenity --error --title=\"$APPIMAGE_NAME\" --text=\"$OM_MSG\" --width=420 2>/dev/null");
