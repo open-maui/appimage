@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ShellDemo
+Comment=ShellDemo - Built with OpenMaui
+Exec=ShellDemo
+Icon=ShellDemo
+Categories=Utility;
+Terminal=false
+StartupWMClass=ShellDemo
+X-AppImage-Version=10.0.101
