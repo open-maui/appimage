@@ -2,6 +2,27 @@
 
 All notable changes to OpenMaui.AppImage will be documented in this file.
 
+## [1.3.0] - Unreleased
+
+### Added
+
+- **`.deb` and `.rpm` output.** `--format deb`, `--format rpm`, `--format all` (AppImage + deb + rpm) or a comma-separated combination (`deb,rpm`) package the same publish output, metadata and dependency scan as the AppImage path. With several formats `--output` is an output directory; default names follow distro conventions (`<pkg>_<ver>-<rel>_<arch>.deb`, `<pkg>-<ver>-<rel>.<arch>.rpm`). Layout: `/opt/<app-id>/` (self-contained publish), `/usr/bin/<package-name>` launcher script, `/usr/share/applications/<app-id>.desktop`, hicolor icon (SVG to `scalable`, PNG to its own size), and `/usr/share/metainfo/<app-id>.metainfo.xml` with `--metainfo`; root:root ownership, 0755 directories/executables, 0644 everything else.
+- **Managed `.deb` writer.** ar archive + `control.tar.gz` (control, md5sums) + `data.tar.gz`, written in-process: no `dpkg-deb`, no root, works on any distro. Honors `SOURCE_DATE_EPOCH` for member mtimes.
+- **`.rpm` via `rpmbuild`.** A generated spec copies the prebuilt tree under a private `_topdir`; stripping, debuginfo and build-id links are disabled so the .NET payload ships untouched, and `AutoReqProv: no` keeps bundled `.so` files out of the system provides. A missing `rpmbuild` fails fast with the install command (`sudo dnf install rpm-build` / `sudo apt install rpm`).
+- **Dependency mapping.** .NET runtime prerequisites (glibc, libstdc++, zlib, OpenSSL, ICU; `dotnet-runtime-X.Y` for framework-dependent publishes) and required host libraries become `Depends` / `Requires`; feature-gated libraries become `Recommends`. WPE WebKit is always a version-qualified `Recommends` (`libwpewebkit-2.0-1 (>= 2.54)`, `wpewebkit >= 2.54`), even for BlazorWebView apps, so packages install on stock Fedora (WPE only in the `philn/wpewebkit` COPR), Debian 13 (WPE 2.48) and Ubuntu (no WPE 2.x); the install notes print after packaging and appear in the rpm description.
+- New options `--package-name`, `--maintainer`, `--license`, `--homepage`, `--release`. With `--project`, the app id, description, maintainer, license and homepage default to the csproj `ApplicationId`, `Description`, `Authors`, `PackageLicenseExpression` and `PackageProjectUrl`.
+
+### Changed
+
+- An unknown `--format` value is now an error instead of silently producing an AppImage.
+- `--output` is no longer required with `--input` for `.deb`/`.rpm` or multi-format runs.
+- WPE guidance for Debian/Ubuntu in the dependency report and the `--host-deps-check` message: `libwpewebkit-2.0-1` (2.54) exists only in Debian testing/sid; on Debian 13 and Ubuntu the WebView falls back to WebKitGTK in GTK mode (`options.UseGtk = true`) and BlazorWebView is unavailable unless WPE 2.54 is installed from elsewhere. The report's `apt install` line no longer lists it.
+
+### Fixed
+
+- **Apps with a single-file `MauiIcon` got a letter placeholder icon** when the project folder could not be found from the publish directory (CI layouts). OpenMaui 10.0.110.1 copies the icon beside the app as `appicon_bg.svg`/`.png`; it is now picked up when there is no separate foreground layer.
+- The host dependency report and `--host-deps-check` now list **GTK 3** (`libgtk-3.so.0`; Fedora `gtk3`, Debian/Ubuntu `libgtk-3-0`) as required: OpenMaui calls `gtk_init_check` at startup and aborts with `DllNotFoundException` without it.
+
 ## [1.2.3] - 2026-09-20
 
 ### Added
