@@ -17,6 +17,8 @@ public class DependencyScannerTests
         Assert.Contains(required, d => d.Sonames.Contains("libX11.so.6"));
         Assert.Contains(required, d => d.Sonames.Contains("libwayland-client.so.0"));
         Assert.Contains(required, d => d.Sonames.Contains("libfontconfig.so.1"));
+        // gtk_init_check runs unconditionally at startup
+        Assert.Contains(required, d => d.Sonames.Contains("libgtk-3.so.0") && d.FedoraPackages == "gtk3" && d.DebianPackages == "libgtk-3-0");
 
         var optional = result.Dependencies.Where(d => !d.Required).ToList();
         Assert.Contains(optional, d => d.Sonames.Contains("libcups.so.2") && d.Feature == "printing");
@@ -131,12 +133,18 @@ public class DependencyScannerTests
         Assert.Equal("wpewebkit", wpe.FedoraPackages);
         Assert.Equal("libwpewebkit-2.0-1", wpe.DebianPackages);
         Assert.Equal(DependencyScanner.WpeFedoraHint, wpe.FedoraHint);
+        // Only Debian testing/sid ship WPE 2.54 (Debian 13 has 2.48, Ubuntu none)
+        Assert.Equal(DependencyScanner.WpeDebianHint, wpe.DebianHint);
+        Assert.Equal("2.54", wpe.MinVersion);
 
         // WebKitGTK stays listed as the GTK-mode fallback.
         Assert.Contains(result.Dependencies, d => d.Sonames.Contains("libwebkit2gtk-4.1.so.0") && !d.Required);
 
         var report = DependencyScanner.FormatReport(result);
         Assert.Contains("philn/wpewebkit", report);
+        Assert.Contains("libwpewebkit-2.0-1 (testing/sid only, see note)", report);
+        Assert.Contains("Debian/Ubuntu note: Debian testing/sid: sudo apt install libwpewebkit-2.0-1; Debian 13 and Ubuntu: no WPE 2.54 package", report);
+        Assert.Contains("options.UseGtk = true", report);
     }
 
     [Fact]
@@ -153,10 +161,43 @@ public class DependencyScannerTests
         var report = DependencyScanner.FormatReport(result);
         Assert.Contains("Fedora first:      " + DependencyScanner.WpeFedoraHint, report);
         Assert.Contains("sudo dnf install", report);
+        // The apt one-liner must not promise a package Debian 13 / Ubuntu lack;
+        // the Debian note carries the WPE guidance instead.
+        var aptLine = report.Split('\n').Single(l => l.Contains("Debian/Ubuntu: sudo apt install"));
+        Assert.DoesNotContain("libwpewebkit", aptLine);
+        Assert.Contains("BlazorWebView is unavailable", report);
 
         var block = DependencyScanner.GenerateAppRunCheckBlock(result.Dependencies);
         Assert.Contains("libWPEWebKit-2.0.so.1", block);
         Assert.Contains("OM_REQ_HINT", block);
         Assert.Contains("philn/wpewebkit", block);
+        Assert.Contains("OM_REQ_DEB_HINT", block);
+        Assert.Contains("Debian testing/sid", block);
+    }
+
+    [Fact]
+    public void Check_Block_With_Distro_Hints_Is_Valid_Posix_Sh()
+    {
+        if (!File.Exists("/bin/sh"))
+            return;
+
+        var result = DependencyScanner.Map(Set(DependencyScanner.BaseAssembly, DependencyScanner.BlazorAssembly,
+            DependencyScanner.MediaElementAssembly));
+        var path = Path.Combine(Path.GetTempPath(), $"check-block-{Guid.NewGuid():N}.sh");
+        File.WriteAllText(path, DependencyScanner.GenerateAppRunCheckBlock(result.Dependencies));
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("/bin/sh") { RedirectStandardError = true };
+            psi.ArgumentList.Add("-n");
+            psi.ArgumentList.Add(path);
+            using var p = System.Diagnostics.Process.Start(psi)!;
+            var err = p.StandardError.ReadToEnd();
+            p.WaitForExit();
+            Assert.True(p.ExitCode == 0, err);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }

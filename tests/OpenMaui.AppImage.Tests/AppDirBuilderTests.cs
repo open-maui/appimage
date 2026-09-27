@@ -130,6 +130,27 @@ public class AppDirBuilderTests
     }
 
     [Fact]
+    public void FindIcon_Uses_The_Copied_Single_File_MauiIcon()
+    {
+        var dir = Directory.CreateTempSubdirectory("icon-test").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "appicon.meta"), "Format=2");
+            File.WriteAllText(Path.Combine(dir, "appicon_bg.svg"), "<svg/>");
+
+            Assert.Equal(Path.Combine(dir, "appicon_bg.svg"), new AppDirBuilder().FindIcon(dir, "MyApp"));
+
+            // With a separate foreground the background alone is not the icon.
+            File.WriteAllText(Path.Combine(dir, "appicon_fg.svg"), "<svg/>");
+            Assert.Null(new AppDirBuilder().FindIcon(dir, "MyApp"));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
     public void AutoDetectExecutable_Finds_Dll_Matching_App_Name()
     {
         var tempDir = Directory.CreateTempSubdirectory("exec-test").FullName;
