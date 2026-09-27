@@ -12,7 +12,42 @@ public static class PackageCommand
     public enum PackageFormat
     {
         AppImage,
-        Flatpak
+        Flatpak,
+        Deb,
+        Rpm
+    }
+
+    /// <summary>
+    /// Parses the --format value: one of appimage, flatpak, deb, rpm, or all
+    /// (appimage + deb + rpm), or a comma-separated combination such as
+    /// "deb,rpm". Case-insensitive. Returns null when any token is unknown.
+    /// </summary>
+    public static List<PackageFormat>? ParseFormats(string? format)
+    {
+        var result = new List<PackageFormat>();
+        if (string.IsNullOrWhiteSpace(format))
+            return new List<PackageFormat> { PackageFormat.AppImage };
+
+        foreach (var token in format.Split(new[] { ',', ' ', '+' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            IEnumerable<PackageFormat> add = token.ToLowerInvariant() switch
+            {
+                "appimage" => new[] { PackageFormat.AppImage },
+                "flatpak" => new[] { PackageFormat.Flatpak },
+                "deb" => new[] { PackageFormat.Deb },
+                "rpm" => new[] { PackageFormat.Rpm },
+                "all" => new[] { PackageFormat.AppImage, PackageFormat.Deb, PackageFormat.Rpm },
+                _ => Array.Empty<PackageFormat>()
+            };
+            if (!add.Any())
+                return null;
+            foreach (var f in add)
+            {
+                if (!result.Contains(f))
+                    result.Add(f);
+            }
+        }
+        return result.Count == 0 ? null : result;
     }
 
     /// <summary>
@@ -29,7 +64,7 @@ public static class PackageCommand
 
     public static RootCommand Create()
     {
-        var rootCommand = new RootCommand("Package .NET MAUI Linux apps as AppImages or Flatpaks");
+        var rootCommand = new RootCommand("Package .NET MAUI Linux apps as AppImages, Flatpaks, .deb or .rpm packages");
 
         var inputOption = new Option<DirectoryInfo>(
             aliases: new[] { "--input", "-i" },
@@ -45,7 +80,7 @@ public static class PackageCommand
 
         var outputOption = new Option<FileInfo>(
             aliases: new[] { "--output", "-o" },
-            description: "Output file path (.AppImage or .flatpak). Defaults to <Name>.AppImage in the current directory when using --project.");
+            description: "Output file path (.AppImage, .flatpak, .deb or .rpm). Defaults to <Name>.AppImage (or <pkg>_<ver>-<rel>_<arch>.deb / <pkg>-<ver>-<rel>.<arch>.rpm) in the current directory. When several formats are selected, this is an output directory.");
 
         var nameOption = new Option<string>(
             aliases: new[] { "--name", "-n" },
@@ -76,11 +111,11 @@ public static class PackageCommand
         var formatOption = new Option<string>(
             aliases: new[] { "--format", "-f" },
             () => "appimage",
-            description: "Output format: appimage or flatpak");
+            description: "Output format: appimage, flatpak, deb, rpm, or all (appimage + deb + rpm). Comma-separated combinations such as deb,rpm are accepted.");
 
         var appIdOption = new Option<string>(
             aliases: new[] { "--app-id" },
-            description: "Application ID in reverse-DNS form (e.g. com.example.MyApp). Used for Flatpak and for --metainfo.");
+            description: "Application ID in reverse-DNS form (e.g. com.example.MyApp). Used for Flatpak, --metainfo, and the .deb/.rpm layout (/opt/<app-id>, desktop file and icon names; default there: the csproj ApplicationId).");
 
         var appDirOption = new Option<bool>(
             aliases: new[] { "--appdir" },
@@ -116,7 +151,28 @@ public static class PackageCommand
 
         var developerOption = new Option<string?>(
             aliases: new[] { "--developer" },
-            description: "Developer name for the AppStream metainfo (used with --metainfo).");
+            description: "Developer name for the AppStream metainfo (used with --metainfo); also the default maintainer name for .deb/.rpm.");
+
+        var packageNameOption = new Option<string?>(
+            aliases: new[] { "--package-name" },
+            description: "Package name for .deb/.rpm and the /usr/bin launcher (default: lowercased app name, e.g. shelldemo).");
+
+        var maintainerOption = new Option<string?>(
+            aliases: new[] { "--maintainer" },
+            description: "Package maintainer as \"Name <email>\" for .deb (Maintainer) and .rpm (Packager). Default: --developer, else the csproj Authors, else the app name.");
+
+        var licenseOption = new Option<string?>(
+            aliases: new[] { "--license" },
+            description: "License (SPDX expression) for the .rpm License tag. Default: csproj PackageLicenseExpression, else 'LicenseRef-Proprietary'.");
+
+        var homepageOption = new Option<string?>(
+            aliases: new[] { "--homepage" },
+            description: "Project homepage for .deb (Homepage) and .rpm (URL). Default: csproj PackageProjectUrl.");
+
+        var releaseOption = new Option<string>(
+            aliases: new[] { "--release" },
+            () => "1",
+            description: "Package release number (.rpm Release, .deb revision).");
 
         rootCommand.AddOption(inputOption);
         rootCommand.AddOption(projectOption);
@@ -139,13 +195,27 @@ public static class PackageCommand
         rootCommand.AddOption(signKeyOption);
         rootCommand.AddOption(metainfoOption);
         rootCommand.AddOption(developerOption);
+        rootCommand.AddOption(packageNameOption);
+        rootCommand.AddOption(maintainerOption);
+        rootCommand.AddOption(licenseOption);
+        rootCommand.AddOption(homepageOption);
+        rootCommand.AddOption(releaseOption);
 
         rootCommand.AddValidator(result =>
         {
             var hasInput = result.GetValueForOption(inputOption) != null;
             var hasProject = result.GetValueForOption(projectOption) != null;
+            var formats = ParseFormats(result.GetValueForOption(formatOption));
+            // A single AppImage/Flatpak target keeps the historical --output requirement
+            // with --input; .deb/.rpm and multi-format runs name their files themselves.
+            var needsExplicitOutput = formats is { Count: 1 } &&
+                formats[0] is PackageFormat.AppImage or PackageFormat.Flatpak;
 
-            if (hasInput && hasProject)
+            if (formats == null)
+            {
+                result.ErrorMessage = $"Unknown --format '{result.GetValueForOption(formatOption)}'. Use appimage, flatpak, deb, rpm, all, or a comma-separated combination (e.g. deb,rpm).";
+            }
+            else if (hasInput && hasProject)
             {
                 result.ErrorMessage = "--input and --project are mutually exclusive; pass one or the other.";
             }
@@ -157,7 +227,7 @@ public static class PackageCommand
             {
                 result.ErrorMessage = "--name is required with --input (with --project it is derived from the .csproj).";
             }
-            else if (hasInput && result.GetValueForOption(outputOption) == null)
+            else if (hasInput && needsExplicitOutput && result.GetValueForOption(outputOption) == null)
             {
                 result.ErrorMessage = "--output is required with --input (with --project it defaults to <Name>.AppImage).";
             }
@@ -187,6 +257,14 @@ public static class PackageCommand
             var signKey = context.ParseResult.GetValueForOption(signKeyOption);
             var metainfo = context.ParseResult.GetValueForOption(metainfoOption);
             var developer = context.ParseResult.GetValueForOption(developerOption);
+            var packageName = context.ParseResult.GetValueForOption(packageNameOption);
+            var maintainer = context.ParseResult.GetValueForOption(maintainerOption);
+            var license = context.ParseResult.GetValueForOption(licenseOption);
+            var homepage = context.ParseResult.GetValueForOption(homepageOption);
+            var release = context.ParseResult.GetValueForOption(releaseOption)!;
+            var formats = ParseFormats(format)!;
+            var wantsNative = formats.Contains(PackageFormat.Deb) || formats.Contains(PackageFormat.Rpm);
+            ProjectMetadata? projectMeta = null;
 
             // --project: publish the project ourselves and package the output
             if (project != null)
@@ -201,6 +279,7 @@ public static class PackageCommand
 
                 var publishRid = rid ?? ProjectPublisher.GetHostRid();
                 name ??= ProjectPublisher.DeriveAppName(csproj);
+                projectMeta = ProjectPublisher.DeriveMetadata(csproj);
                 if (!versionExplicit)
                     version = ProjectPublisher.DeriveVersion(csproj) ?? version;
 
@@ -226,8 +305,14 @@ public static class PackageCommand
                 input = new DirectoryInfo(publishDir);
             }
 
-            var isFlatpak = ResolveFormat(format) == PackageFormat.Flatpak;
-            output ??= new FileInfo($"{AppDirBuilder.SanitizeFileName(name!)}{(isFlatpak ? ".flatpak" : ".AppImage")}");
+            // --output: a file for a single format, a directory for several
+            var multiFormat = formats.Count > 1;
+            var outputDir = multiFormat && output != null ? output.FullName : null;
+            var explicitOutput = multiFormat ? null : output;
+
+            // System packages default their app id to the csproj ApplicationId
+            if (wantsNative && string.IsNullOrEmpty(appId) && !string.IsNullOrEmpty(projectMeta?.ApplicationId))
+                appId = projectMeta.ApplicationId;
 
             // --metainfo wants a stable reverse-DNS app id
             if (metainfo)
@@ -246,7 +331,7 @@ public static class PackageCommand
             var options = new PackageOptions
             {
                 InputDirectory = input!,
-                OutputFile = output,
+                OutputFile = explicitOutput ?? new FileInfo(Path.Combine(outputDir ?? ".", $"{AppDirBuilder.SanitizeFileName(name!)}.AppImage")),
                 AppName = name!,
                 ExecutableName = exec,
                 IconPath = icon,
@@ -262,21 +347,51 @@ public static class PackageCommand
                 Sign = sign,
                 SignKey = signKey,
                 GenerateMetainfo = metainfo,
-                Developer = developer
+                Developer = developer,
+                PackageName = packageName,
+                Maintainer = maintainer ?? developer ?? projectMeta?.Authors,
+                License = license ?? projectMeta?.License,
+                Homepage = homepage ?? projectMeta?.ProjectUrl,
+                PackageRelease = release,
+                Description = projectMeta?.Description
             };
 
-            bool result;
-            if (isFlatpak)
+            var allOk = true;
+            var failed = new List<string>();
+
+            if (formats.Contains(PackageFormat.AppImage))
             {
-                var packer = new FlatpakPacker();
-                result = await packer.BuildAsync(options);
-            }
-            else
-            {
-                result = await RunAppImageAsync(options);
+                if (!await RunAppImageAsync(options))
+                {
+                    allOk = false;
+                    failed.Add("appimage");
+                }
             }
 
-            context.ExitCode = result ? 0 : 1;
+            if (formats.Contains(PackageFormat.Flatpak))
+            {
+                var flatpakOutput = explicitOutput ?? new FileInfo(Path.Combine(outputDir ?? ".", $"{AppDirBuilder.SanitizeFileName(name!)}.flatpak"));
+                if (!await new FlatpakPacker().BuildAsync(options with { OutputFile = flatpakOutput }))
+                {
+                    allOk = false;
+                    failed.Add("flatpak");
+                }
+            }
+
+            if (wantsNative)
+            {
+                var nativeFormats = formats.Where(f => f is PackageFormat.Deb or PackageFormat.Rpm).ToList();
+                if (!await RunNativeAsync(options, nativeFormats, explicitOutput, outputDir))
+                {
+                    allOk = false;
+                    failed.Add(string.Join("/", nativeFormats.Select(f => f.ToString().ToLowerInvariant())));
+                }
+            }
+
+            if (multiFormat && !allOk)
+                Console.Error.WriteLine($"Error: packaging failed for: {string.Join(", ", failed)}");
+
+            context.ExitCode = allOk ? 0 : 1;
         });
 
         return rootCommand;
@@ -315,69 +430,11 @@ public static class PackageCommand
             return false;
         }
 
-        // Find the main executable
-        var execName = options.ExecutableName;
+        var execName = ResolveExecutable(appFilesDir, options.AppName, options.ExecutableName);
+        if (execName == null)
+            return false;
 
-        // Auto-detect executable if not specified
-        if (string.IsNullOrEmpty(execName))
-        {
-            execName = appDirBuilder.AutoDetectExecutable(appFilesDir, options.AppName);
-            if (execName != null)
-            {
-                Console.WriteLine($"  Auto-detected executable: {execName}");
-            }
-        }
-
-        // Fallback to app name variations
-        if (string.IsNullOrEmpty(execName))
-        {
-            execName = options.AppName;
-        }
-
-        var mainExec = Path.Combine(appFilesDir, execName);
-        if (!File.Exists(mainExec))
-        {
-            // Try with common variations
-            var candidates = new[]
-            {
-                mainExec,
-                mainExec + ".dll",
-                Path.Combine(appFilesDir, execName.Replace(" ", "")),
-                Path.Combine(appFilesDir, execName.Replace(" ", "") + ".dll")
-            };
-
-            var found = candidates.FirstOrDefault(File.Exists);
-            if (found != null)
-            {
-                // Update execName to the actual name (without spaces)
-                execName = Path.GetFileNameWithoutExtension(found);
-                mainExec = found;
-            }
-            else
-            {
-                // List available executables
-                var dlls = Directory.GetFiles(appFilesDir, "*.dll")
-                    .Select(Path.GetFileNameWithoutExtension)
-                    .Take(10)
-                    .ToList();
-
-                Console.Error.WriteLine($"Error: Could not find executable '{execName}' in {appFilesDir}");
-                Console.Error.WriteLine($"Available DLLs: {string.Join(", ", dlls)}");
-                Console.Error.WriteLine("Use --executable to specify the correct name.");
-                return false;
-            }
-        }
-
-        // Auto-detect icon if not specified
-        if (options.IconPath == null || !options.IconPath.Exists)
-        {
-            var detectedIcon = appDirBuilder.FindIcon(options.InputDirectory.FullName, execName);
-            if (detectedIcon != null)
-            {
-                options = options with { IconPath = new FileInfo(detectedIcon) };
-                Console.WriteLine($"  Auto-detected icon: {Path.GetFileName(detectedIcon)}");
-            }
-        }
+        options = ResolveIcon(options, execName);
 
         // Create temporary AppDir structure
         var tempDir = Path.Combine(Path.GetTempPath(), $"appimage-{Guid.NewGuid():N}");
@@ -418,6 +475,254 @@ public static class PackageCommand
             {
                 if (Directory.Exists(tempDir))
                     Directory.Delete(tempDir, recursive: true);
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>
+    /// Resolves the main executable name in <paramref name="appFilesDir"/>: the
+    /// explicit --executable, else auto-detection (ELF, name-matching dll,
+    /// runtimeconfig), else the app name; tolerates a ".dll" suffix and spaces.
+    /// Prints an error listing candidate DLLs and returns null when not found.
+    /// </summary>
+    public static string? ResolveExecutable(string appFilesDir, string appName, string? explicitName)
+    {
+        var appDirBuilder = new AppDirBuilder();
+        var execName = explicitName;
+
+        // Auto-detect executable if not specified
+        if (string.IsNullOrEmpty(execName))
+        {
+            execName = appDirBuilder.AutoDetectExecutable(appFilesDir, appName);
+            if (execName != null)
+            {
+                Console.WriteLine($"  Auto-detected executable: {execName}");
+            }
+        }
+
+        // Fallback to app name variations
+        if (string.IsNullOrEmpty(execName))
+        {
+            execName = appName;
+        }
+
+        var mainExec = Path.Combine(appFilesDir, execName);
+        if (!File.Exists(mainExec))
+        {
+            // Try with common variations
+            var candidates = new[]
+            {
+                mainExec,
+                mainExec + ".dll",
+                Path.Combine(appFilesDir, execName.Replace(" ", "")),
+                Path.Combine(appFilesDir, execName.Replace(" ", "") + ".dll")
+            };
+
+            var found = candidates.FirstOrDefault(File.Exists);
+            if (found != null)
+            {
+                // Update execName to the actual name (without spaces)
+                execName = Path.GetFileNameWithoutExtension(found);
+            }
+            else
+            {
+                // List available executables
+                var dlls = Directory.GetFiles(appFilesDir, "*.dll")
+                    .Select(Path.GetFileNameWithoutExtension)
+                    .Take(10)
+                    .ToList();
+
+                Console.Error.WriteLine($"Error: Could not find executable '{execName}' in {appFilesDir}");
+                Console.Error.WriteLine($"Available DLLs: {string.Join(", ", dlls)}");
+                Console.Error.WriteLine("Use --executable to specify the correct name.");
+                return null;
+            }
+        }
+
+        return execName;
+    }
+
+    /// <summary>Auto-detects the icon (csproj MauiIcon, then well-known file names) when --icon is absent.</summary>
+    public static PackageOptions ResolveIcon(PackageOptions options, string execName)
+    {
+        if (options.IconPath == null || !options.IconPath.Exists)
+        {
+            var detectedIcon = new AppDirBuilder().FindIcon(options.InputDirectory.FullName, execName);
+            if (detectedIcon != null)
+            {
+                options = options with { IconPath = new FileInfo(detectedIcon) };
+                Console.WriteLine($"  Auto-detected icon: {Path.GetFileName(detectedIcon)}");
+            }
+        }
+        return options;
+    }
+
+    /// <summary>
+    /// Builds the resolved metadata for .deb/.rpm output from the options and
+    /// the publish directory (architecture and runtime flavor are detected
+    /// from the files).
+    /// </summary>
+    public static NativePackageMetadata BuildNativeMetadata(PackageOptions options, string execName)
+    {
+        var publishDir = options.InputDirectory.FullName;
+        var appId = NativePackageMetadata.SanitizeAppId(
+            options.AppId ?? $"com.openmaui.{AppStreamGenerator.SanitizeIdSegment(options.AppName)}");
+        var runtime = NativePackageMetadata.DetectRuntime(publishDir, execName);
+
+        return new NativePackageMetadata
+        {
+            PackageName = NativePackageMetadata.SanitizePackageName(options.PackageName ?? options.AppName),
+            AppName = options.AppName,
+            AppId = appId,
+            ExecutableName = execName,
+            Version = options.Version,
+            Release = string.IsNullOrWhiteSpace(options.PackageRelease) ? "1" : options.PackageRelease.Trim(),
+            Architecture = NativePackageMetadata.DetectArchitecture(publishDir, execName),
+            Runtime = runtime,
+            FrameworkVersion = runtime == DotNetRuntimeKind.FrameworkDependent
+                ? NativePackageMetadata.ReadFrameworkVersion(publishDir, execName)
+                : null,
+            Maintainer = NativePackageMetadata.NormalizeMaintainer(
+                string.IsNullOrWhiteSpace(options.Maintainer) ? options.AppName : options.Maintainer),
+            License = string.IsNullOrWhiteSpace(options.License) ? "LicenseRef-Proprietary" : options.License,
+            Homepage = options.Homepage,
+            Summary = options.Comment,
+            Description = options.Description,
+            Category = options.Category
+        };
+    }
+
+    /// <summary>
+    /// The .deb/.rpm flow: resolves executable, icon and metadata, maps the
+    /// scanned host dependencies to package relationships, stages the FHS tree
+    /// once, and writes each requested package (.deb in managed code, .rpm via
+    /// rpmbuild).
+    /// </summary>
+    public static async Task<bool> RunNativeAsync(PackageOptions options, IReadOnlyList<PackageFormat> formats,
+        FileInfo? explicitOutput, string? outputDir)
+    {
+        var label = string.Join(" and ", formats.Select(f => "." + f.ToString().ToLowerInvariant()));
+        Console.WriteLine($"Building {label} for {options.AppName}...");
+        Console.WriteLine($"  Input: {options.InputDirectory.FullName}");
+
+        if (!options.InputDirectory.Exists)
+        {
+            Console.Error.WriteLine($"Error: Input directory does not exist: {options.InputDirectory.FullName}");
+            return false;
+        }
+
+        if (options.PreBuiltAppDir)
+        {
+            Console.Error.WriteLine("Error: --appdir is only supported for AppImage output; .deb/.rpm take a publish directory (--input) or --project.");
+            return false;
+        }
+
+        // Fail fast before staging when rpmbuild is missing
+        if (formats.Contains(PackageFormat.Rpm) && ProcessRunner.FindOnPath("rpmbuild") == null)
+        {
+            Console.Error.WriteLine("Error: " + RpmPackageBuilder.MissingRpmbuildMessage);
+            return false;
+        }
+
+        var execName = ResolveExecutable(options.InputDirectory.FullName, options.AppName, options.ExecutableName);
+        if (execName == null)
+            return false;
+
+        options = ResolveIcon(options, execName);
+        var meta = BuildNativeMetadata(options, execName);
+
+        if (!meta.Maintainer.Contains('<') || meta.Maintainer.Contains($"<{NativePackageMetadata.DefaultMaintainerEmail}>"))
+            Console.WriteLine($"  Note: maintainer defaults to '{meta.Maintainer}'; pass --maintainer \"Name <email>\" for published packages.");
+
+        var scan = DependencyScanner.Scan(options.InputDirectory.FullName);
+        var deps = NativeDependencyMapper.Map(scan, meta.Runtime, meta.FrameworkVersion);
+
+        Console.WriteLine($"  Package: {meta.PackageName} {meta.Version} ({meta.Architecture.Debian}/{meta.Architecture.Rpm})");
+        Console.WriteLine($"  App id:  {meta.AppId} -> {meta.InstallDir}, launcher {meta.LauncherPath}");
+
+        var workDir = Path.Combine(Path.GetTempPath(), $"openmaui-pkg-{Guid.NewGuid():N}");
+        try
+        {
+            Console.WriteLine("  Staging install tree...");
+            var staged = NativeLayoutBuilder.Stage(Path.Combine(workDir, "root"), options.InputDirectory.FullName,
+                meta, options.IconPath, options.GenerateMetainfo, options.Developer);
+
+            var ok = true;
+            var produced = new List<string>();
+
+            if (formats.Contains(PackageFormat.Deb))
+            {
+                var debPath = explicitOutput?.FullName ?? Path.GetFullPath(Path.Combine(outputDir ?? ".", meta.DebFileName));
+                Console.WriteLine("  Writing .deb...");
+                try
+                {
+                    DebPackageWriter.Write(staged, meta, deps, debPath);
+                    produced.Add(debPath);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"Error: writing the .deb failed: {ex.Message}");
+                    ok = false;
+                }
+            }
+
+            if (formats.Contains(PackageFormat.Rpm))
+            {
+                var rpmPath = explicitOutput?.FullName ?? Path.GetFullPath(Path.Combine(outputDir ?? ".", meta.RpmFileName));
+                Console.WriteLine("  Running rpmbuild...");
+                if (await RpmPackageBuilder.BuildAsync(staged, meta, deps, rpmPath, workDir, options.Developer))
+                    produced.Add(rpmPath);
+                else
+                    ok = false;
+            }
+
+            if (produced.Count > 0)
+            {
+                Console.WriteLine();
+                foreach (var path in produced)
+                    Console.WriteLine($"Package created successfully: {path}");
+                Console.WriteLine();
+
+                if (deps.DebDepends.Count + deps.DebRecommends.Count > 0)
+                {
+                    Console.WriteLine("Package relationships:");
+                    if (formats.Contains(PackageFormat.Deb))
+                    {
+                        Console.WriteLine($"  deb Depends:    {string.Join(", ", deps.DebDepends)}");
+                        if (deps.DebRecommends.Count > 0)
+                            Console.WriteLine($"  deb Recommends: {string.Join(", ", deps.DebRecommends)}");
+                    }
+                    if (formats.Contains(PackageFormat.Rpm))
+                    {
+                        Console.WriteLine($"  rpm Requires:   {string.Join(", ", deps.RpmRequires)}");
+                        if (deps.RpmRecommends.Count > 0)
+                            Console.WriteLine($"  rpm Recommends: {string.Join(", ", deps.RpmRecommends)}");
+                    }
+                    foreach (var note in deps.Notes)
+                        Console.WriteLine($"  Note: {note}");
+                    Console.WriteLine();
+                }
+
+                Console.WriteLine("To install:");
+                foreach (var path in produced)
+                {
+                    var file = Path.GetFileName(path);
+                    Console.WriteLine(path.EndsWith(".deb", StringComparison.Ordinal)
+                        ? $"  sudo apt install ./{file}"
+                        : $"  sudo dnf install ./{file}");
+                }
+                Console.WriteLine($"Then run '{meta.PackageName}' or launch {meta.AppName} from the application menu.");
+            }
+
+            return ok;
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(workDir))
+                    Directory.Delete(workDir, recursive: true);
             }
             catch { }
         }

@@ -60,4 +60,24 @@ public record PackageOptions
 
     /// <summary>Developer name for the AppStream metainfo (&lt;developer&gt;&lt;name&gt;).</summary>
     public string? Developer { get; init; }
+
+    // --- System packages (.deb / .rpm) ---
+
+    /// <summary>Package name for .deb/.rpm (default: lowercased, sanitized app name).</summary>
+    public string? PackageName { get; init; }
+
+    /// <summary>Maintainer "Name &lt;email&gt;" (Debian Maintainer / RPM Packager).</summary>
+    public string? Maintainer { get; init; }
+
+    /// <summary>License (SPDX expression recommended) for the RPM License tag.</summary>
+    public string? License { get; init; }
+
+    /// <summary>Project homepage (Debian Homepage / RPM URL).</summary>
+    public string? Homepage { get; init; }
+
+    /// <summary>Package release / Debian revision (default "1").</summary>
+    public string PackageRelease { get; init; } = "1";
+
+    /// <summary>Long description for the package (falls back to <see cref="Comment"/>).</summary>
+    public string? Description { get; init; }
 }

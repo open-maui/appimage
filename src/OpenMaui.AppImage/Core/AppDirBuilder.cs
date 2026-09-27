@@ -497,6 +497,19 @@ X-AppImage-Version={options.Version}
         if (csprojIcon != null)
             return csprojIcon;
 
+        // OpenMaui's build copies the MauiIcon file beside the app as
+        // appicon_bg.* (the whole icon when there is no ForegroundFile, which
+        // would be copied as appicon_fg.svg).
+        if (!File.Exists(Path.Combine(inputDir, "appicon_fg.svg")))
+        {
+            foreach (var ext in new[] { ".svg", ".png" })
+            {
+                var layer = Path.Combine(inputDir, "appicon_bg" + ext);
+                if (File.Exists(layer))
+                    return layer;
+            }
+        }
+
         // Fallback to searching for icon files directly
         var extensions = new[] { ".svg", ".png", ".ico" };
 

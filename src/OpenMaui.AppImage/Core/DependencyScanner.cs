@@ -12,6 +12,8 @@ namespace OpenMaui.AppImage.Core;
 /// <param name="FedoraPackages">Package name(s) on Fedora (dnf).</param>
 /// <param name="DebianPackages">Package name(s) on Debian/Ubuntu (apt).</param>
 /// <param name="FedoraHint">Extra Fedora step printed with the install command (for example enabling a COPR), or null.</param>
+/// <param name="DebianHint">Availability caveat for Debian/Ubuntu (for example "only in testing/sid"), or null. A dependency with a hint is never a hard .deb Depends.</param>
+/// <param name="MinVersion">Minimum upstream version the feature needs (e.g. "2.54"), used to version-qualify package relationships; null for any.</param>
 public sealed record HostDependency(
     string DisplayName,
     string[] Sonames,
@@ -19,7 +21,9 @@ public sealed record HostDependency(
     string? Feature,
     string FedoraPackages,
     string DebianPackages,
-    string? FedoraHint = null);
+    string? FedoraHint = null,
+    string? DebianHint = null,
+    string? MinVersion = null);
 
 public sealed record DependencyScanResult(
     IReadOnlyList<string> DetectedAssemblies,
@@ -40,6 +44,18 @@ public static class DependencyScanner
 
     /// <summary>Fedora ships no WPE packages; this COPR (maintained by an Igalia WPE developer) does.</summary>
     public const string WpeFedoraHint = "sudo dnf copr enable philn/wpewebkit";
+
+    /// <summary>
+    /// WPE WebKit 2.54+ is only packaged in Debian testing/sid (Debian 13 has 2.48,
+    /// Ubuntu has no WPE 2.x package at all).
+    /// </summary>
+    public const string WpeDebianHint =
+        "Debian testing/sid: sudo apt install libwpewebkit-2.0-1; Debian 13 and Ubuntu: no WPE 2.54 package, " +
+        "the WebView falls back to WebKitGTK in GTK mode (options.UseGtk = true) and BlazorWebView is unavailable " +
+        "unless WPE 2.54 is built or installed from elsewhere";
+
+    /// <summary>Minimum WPE WebKit version OpenMaui needs (WPEPlatform API).</summary>
+    public const string WpeMinVersion = "2.54";
 
     /// <summary>Scans <paramref name="rootDir"/> recursively and maps found assemblies.</summary>
     public static DependencyScanResult Scan(string rootDir)
@@ -71,6 +87,10 @@ public static class DependencyScanner
                 Required: true, Feature: null, "libwayland-client", "libwayland-client0"));
             deps.Add(new HostDependency("fontconfig", new[] { "libfontconfig.so.1" },
                 Required: true, Feature: null, "fontconfig", "libfontconfig1"));
+            // gtk_init_check runs unconditionally at startup (also file chooser / print dialog);
+            // without libgtk-3 the app aborts with DllNotFoundException before any window.
+            deps.Add(new HostDependency("GTK 3", new[] { "libgtk-3.so.0" },
+                Required: true, Feature: null, "gtk3", "libgtk-3-0"));
 
             // Optional, feature-gated.
             deps.Add(new HostDependency("libcups", new[] { "libcups.so.2" },
@@ -80,7 +100,7 @@ public static class DependencyScanner
             // WebView: WPE WebKit (composited, native Wayland/X11 mode) is preferred;
             // WebKitGTK is the fallback and only displays in GTK mode.
             deps.Add(new HostDependency("WPE WebKit 2.54+", new[] { "libWPEWebKit-2.0.so.1" },
-                Required: false, Feature: "WebView (native mode)", "wpewebkit", "libwpewebkit-2.0-1", WpeFedoraHint));
+                Required: false, Feature: "WebView (native mode)", "wpewebkit", "libwpewebkit-2.0-1", WpeFedoraHint, WpeDebianHint, WpeMinVersion));
             deps.Add(new HostDependency("webkit2gtk-4.1", new[] { "libwebkit2gtk-4.1.so.0" },
                 Required: false, Feature: "WebView (GTK-mode fallback)", "webkit2gtk4.1", "libwebkit2gtk-4.1-0"));
         }
@@ -91,7 +111,7 @@ public static class DependencyScanner
             // BlazorWebView runs only on WPE: promote it from feature-gated to required.
             deps.RemoveAll(d => d.Sonames.Contains("libWPEWebKit-2.0.so.1"));
             deps.Add(new HostDependency("WPE WebKit 2.54+", new[] { "libWPEWebKit-2.0.so.1" },
-                Required: true, Feature: "BlazorWebView", "wpewebkit", "libwpewebkit-2.0-1", WpeFedoraHint));
+                Required: true, Feature: "BlazorWebView", "wpewebkit", "libwpewebkit-2.0-1", WpeFedoraHint, WpeDebianHint, WpeMinVersion));
             notes.Add("BlazorWebView (OpenMaui.Controls.Linux.Blazor) requires WPE WebKit on the host; the WebKitGTK fallback does not apply.");
         }
 
@@ -115,6 +135,8 @@ public static class DependencyScanner
 
     private static string HintSuffix(HostDependency d) => d.FedoraHint == null ? "" : $" (first: {d.FedoraHint})";
 
+    private static string DebianHintSuffix(HostDependency d) => d.DebianHint == null ? "" : " (testing/sid only, see note)";
+
     /// <summary>Concise "Host runtime dependencies" report printed after packaging.</summary>
     public static string FormatReport(DependencyScanResult result)
     {
@@ -135,25 +157,28 @@ public static class DependencyScanner
         {
             sb.AppendLine("  Required:");
             foreach (var d in required)
-                sb.AppendLine($"    {d.DisplayName} ({string.Join(" or ", d.Sonames)})  [Fedora: {d.FedoraPackages}{HintSuffix(d)}] [Debian/Ubuntu: {d.DebianPackages}]");
+                sb.AppendLine($"    {d.DisplayName} ({string.Join(" or ", d.Sonames)})  [Fedora: {d.FedoraPackages}{HintSuffix(d)}] [Debian/Ubuntu: {d.DebianPackages}{DebianHintSuffix(d)}]");
         }
 
         if (optional.Count > 0)
         {
             sb.AppendLine("  Optional (feature-gated):");
             foreach (var d in optional)
-                sb.AppendLine($"    {d.DisplayName} - {d.Feature} ({string.Join(" or ", d.Sonames)})  [Fedora: {d.FedoraPackages}{HintSuffix(d)}] [Debian/Ubuntu: {d.DebianPackages}]");
+                sb.AppendLine($"    {d.DisplayName} - {d.Feature} ({string.Join(" or ", d.Sonames)})  [Fedora: {d.FedoraPackages}{HintSuffix(d)}] [Debian/Ubuntu: {d.DebianPackages}{DebianHintSuffix(d)}]");
         }
 
         foreach (var note in result.Notes)
             sb.AppendLine($"  Note: {note}");
+
+        foreach (var hint in result.Dependencies.Where(d => d.DebianHint != null).Select(d => d.DebianHint!).Distinct())
+            sb.AppendLine($"  Debian/Ubuntu note: {hint}");
 
         if (required.Count > 0)
         {
             foreach (var hint in required.Where(d => d.FedoraHint != null).Select(d => d.FedoraHint!).Distinct())
                 sb.AppendLine($"  Fedora first:      {hint}");
             sb.AppendLine($"  Install required:  Fedora:        sudo dnf install {string.Join(" ", required.Select(d => d.FedoraPackages))}");
-            sb.AppendLine($"                     Debian/Ubuntu: sudo apt install {string.Join(" ", required.Select(d => d.DebianPackages))}");
+            sb.AppendLine($"                     Debian/Ubuntu: sudo apt install {string.Join(" ", required.Where(d => d.DebianHint == null).Select(d => d.DebianPackages))}");
         }
 
         return sb.ToString();
@@ -177,6 +202,7 @@ public static class DependencyScanner
         sb.AppendLine("    OM_REQ_HINT=\"\"");
         sb.AppendLine("    OM_REQ_DNF=\"\"");
         sb.AppendLine("    OM_REQ_APT=\"\"");
+        sb.AppendLine("    OM_REQ_DEB_HINT=\"\"");
 
         foreach (var dep in dependencies)
         {
@@ -184,6 +210,8 @@ public static class DependencyScanner
             if (dep.Required)
             {
                 var hint = dep.FedoraHint == null ? "" : $" OM_REQ_HINT=\"$OM_REQ_HINT ({dep.FedoraHint})\";";
+                if (dep.DebianHint != null)
+                    hint += $" OM_REQ_DEB_HINT=\"$OM_REQ_DEB_HINT ({dep.DebianHint})\";";
                 sb.AppendLine($"    {probe} || {{ OM_MISSING_REQ=\"$OM_MISSING_REQ {dep.Sonames[0]}\"; OM_REQ_DNF=\"$OM_REQ_DNF {dep.FedoraPackages}\"; OM_REQ_APT=\"$OM_REQ_APT {dep.DebianPackages}\";{hint} }}");
             }
             else
@@ -197,7 +225,7 @@ public static class DependencyScanner
         sb.AppendLine();
         sb.AppendLine("Install them with:");
         sb.AppendLine("  Fedora:        sudo dnf install$OM_REQ_DNF$OM_REQ_HINT");
-        sb.AppendLine("  Debian/Ubuntu: sudo apt install$OM_REQ_APT\"");
+        sb.AppendLine("  Debian/Ubuntu: sudo apt install$OM_REQ_APT$OM_REQ_DEB_HINT\"");
         sb.AppendLine("        if command -v zenity >/dev/null 2>&1; then");
         sb.AppendLine("            zenity --error --title=\"$APPIMAGE_NAME\" --text=\"$OM_MSG\" --width=420 2>/dev/null");
         sb.AppendLine("        elif command -v kdialog >/dev/null 2>&1; then");

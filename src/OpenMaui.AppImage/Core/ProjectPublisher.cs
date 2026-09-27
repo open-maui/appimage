@@ -71,6 +71,21 @@ public static class ProjectPublisher
     }
 
     /// <summary>
+    /// Packaging metadata read from the csproj for .deb/.rpm output:
+    /// ApplicationId (MAUI), Description, Authors, PackageLicenseExpression and
+    /// PackageProjectUrl. Missing properties are null.
+    /// </summary>
+    public static ProjectMetadata DeriveMetadata(string csprojPath)
+    {
+        return new ProjectMetadata(
+            ApplicationId: ReadProperty(csprojPath, "ApplicationId"),
+            Description: ReadProperty(csprojPath, "Description"),
+            Authors: ReadProperty(csprojPath, "Authors") ?? ReadProperty(csprojPath, "Company"),
+            License: ReadProperty(csprojPath, "PackageLicenseExpression"),
+            ProjectUrl: ReadProperty(csprojPath, "PackageProjectUrl"));
+    }
+
+    /// <summary>
     /// Reads the first non-empty, non-MSBuild-expression value of a property from
     /// the csproj. Namespace-agnostic (handles both SDK-style and legacy projects).
     /// </summary>
@@ -120,3 +135,11 @@ public static class ProjectPublisher
         return best;
     }
 }
+
+/// <summary>Csproj-derived metadata used for system packages.</summary>
+public sealed record ProjectMetadata(
+    string? ApplicationId,
+    string? Description,
+    string? Authors,
+    string? License,
+    string? ProjectUrl);
