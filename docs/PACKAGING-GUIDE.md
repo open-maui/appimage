@@ -1,8 +1,9 @@
 # Packaging OpenMaui Linux apps with OpenMaui.AppImage
 
-Reference for packaging a .NET MAUI Linux (OpenMaui) application as an AppImage.
-Written to be followed verbatim by a human or an AI coding assistant working
-inside a consumer project. Every command is copy-paste exact. Version: tool 1.2.3.
+Reference for packaging a .NET MAUI Linux (OpenMaui) application as an AppImage,
+`.deb` or `.rpm`. Written to be followed verbatim by a human or an AI coding
+assistant working inside a consumer project. Every command is copy-paste exact.
+Version: tool 1.3.0.
 
 ## TL;DR — the golden path
 
@@ -39,15 +40,20 @@ Update with `dotnet tool update --global OpenMaui.AppImage`.
 | `--project`, `-p <path>` | Csproj (or directory containing exactly one). The tool publishes it and packages the output. | — |
 | `--rid <rid>` | Runtime identifier for publish. | host arch (`linux-x64`/`linux-arm64`) |
 | `--input`, `-i <dir>` | Pre-published output directory (two-step flow). | — |
-| `--output`, `-o <file>` | Output AppImage path. | `<Name>.AppImage` (with `--project`); required with `--input` |
+| `--output`, `-o <file>` | Output file path; an output directory when several formats are selected. | `<Name>.AppImage` / `<pkg>_<ver>-<rel>_<arch>.deb` / `<pkg>-<ver>-<rel>.<arch>.rpm` in the current directory; required with `--input` only for a single AppImage/Flatpak |
 | `--name <name>` | Application display name. | derived from csproj with `--project`; required with `--input` |
 | `--app-version <v>` | Version stamped into the AppImage. | derived from csproj `Version` |
 | `--exec <name>` | Executable name inside the publish output. | auto-detected |
 | `--icon <file>` | Icon (SVG preferred, PNG/ICO accepted). | auto-detected from project (MauiIcon) |
 | `--category <cat>` | Freedesktop menu category. | `Utility` |
 | `--comment <text>` | Desktop-entry comment / AppStream summary. | generic |
-| `--app-id <id>` | Reverse-DNS id (e.g. `com.example.myapp`). | derived (warned) |
-| `--format <appimage\|flatpak>` | Output format. | `appimage` |
+| `--app-id <id>` | Reverse-DNS id (e.g. `com.example.myapp`). Names `/opt/<app-id>`, the desktop file and icon in `.deb`/`.rpm`. | csproj `ApplicationId` for deb/rpm, else derived (warned) |
+| `--format`, `-f <fmt>` | `appimage`, `flatpak`, `deb`, `rpm`, `all` (= appimage + deb + rpm), or comma-separated (`deb,rpm`). Unknown values are an error. | `appimage` |
+| `--package-name <n>` | `.deb`/`.rpm` package name and `/usr/bin` launcher name. | lowercased app name |
+| `--maintainer "<Name <email>>"` | deb `Maintainer` / rpm `Packager`. | `--developer`, else csproj `Authors`, else app name + `<noreply@localhost>` |
+| `--license <spdx>` | rpm `License`. | csproj `PackageLicenseExpression`, else `LicenseRef-Proprietary` |
+| `--homepage <url>` | deb `Homepage` / rpm `URL`. | csproj `PackageProjectUrl` |
+| `--release <n>` | rpm `Release` / Debian revision. | `1` |
 | `--appdir` | Treat `--input` as a ready FHS tree (deb contents, Tauri/Electron dirs). | off |
 | `--no-fuse` | Force appimagetool extract-and-run (containers/CI without `/dev/fuse`). Auto-detected anyway. | auto |
 | `--no-fetch` | Forbid network (no appimagetool auto-download). Fails if appimagetool is absent. | off |
@@ -57,8 +63,10 @@ Update with `dotnet tool update --global OpenMaui.AppImage`.
 | `--metainfo` | Generate AppStream `usr/share/metainfo/<app-id>.metainfo.xml`. Use with a real `--app-id`. | off |
 | `--developer <name>` | Developer name for AppStream metadata. | — |
 
-Exit code 0 = success (the final line prints `AppImage created successfully: <path>`);
-non-zero = failure with the reason on stderr.
+Exit code 0 = success (AppImage: `AppImage created successfully: <path>`; deb/rpm:
+one `Package created successfully: <path>` line per package); non-zero = failure
+with the reason on stderr. With several formats, every format is attempted and the
+exit code is non-zero if any failed.
 
 ## Recipes
 
@@ -92,6 +100,35 @@ dotnet publish ./MyApp -c Release -r linux-x64 --self-contained true -p:SomeFlag
 openmaui-appimage -i ./MyApp/bin/Release/net10.0/linux-x64/publish -n "MyApp" -o MyApp.AppImage
 ```
 
+### .deb and .rpm (system packages)
+```bash
+openmaui-appimage --project ./MyApp -f deb,rpm -o dist/ \
+  --maintainer "Example Corp <packages@example.com>" --license MIT --metainfo
+```
+Produces `dist/myapp_<ver>-1_amd64.deb` and `dist/myapp-<ver>-1.x86_64.rpm`.
+`-f all` adds the AppImage. The `.deb` needs no external tools; the `.rpm` needs
+`rpmbuild` (`sudo dnf install rpm-build` / `sudo apt install rpm`) and fails with
+that message when it is missing. `--appdir` is not supported for deb/rpm.
+
+Installed layout: `/opt/<app-id>/` (publish output), `/usr/bin/<package-name>`
+(launcher script), `/usr/share/applications/<app-id>.desktop`,
+`/usr/share/icons/hicolor/scalable/apps/<app-id>.svg` (or the PNG's own size
+directory), `/usr/share/metainfo/<app-id>.metainfo.xml` with `--metainfo`.
+Ownership root:root; 0755 for directories and executables, 0644 otherwise.
+
+Dependency mapping: .NET runtime prerequisites and required host libraries become
+`Depends` (deb) / `Requires` (rpm); feature-gated libraries become `Recommends`.
+WPE WebKit is always a version-qualified `Recommends` (`libwpewebkit-2.0-1 (>= 2.54)`,
+`wpewebkit >= 2.54`), never a hard dependency, because stock Fedora, Debian 13 and
+Ubuntu cannot satisfy it.
+
+Verify without installing:
+```bash
+rpm -qip dist/*.rpm; rpm -qlp dist/*.rpm; rpm -qp --requires dist/*.rpm; rpm -qp --recommends dist/*.rpm
+dpkg-deb --info dist/*.deb; dpkg-deb --contents dist/*.deb   # on Debian/Ubuntu
+mkdir x && cd x && ar x ../dist/*.deb && tar xzf control.tar.gz && cat control && tar tvzf data.tar.gz  # anywhere
+```
+
 ### Package an existing .deb / FHS tree
 ```bash
 dpkg-deb -x package.deb tree/
@@ -111,7 +148,7 @@ openmaui-appimage -i tree/ --appdir -n "MyApp" --exec myapp -o MyApp.AppImage
 
 AppImages bundle the app and .NET, NOT desktop system libraries. After packaging,
 the tool prints a "Host runtime dependencies" report for OpenMaui apps:
-required (libX11, libwayland-client, fontconfig — present on any desktop distro)
+required (libX11, libwayland-client, fontconfig, GTK 3 — present on any desktop distro)
 and feature-gated (GStreamer for MediaElement, libcups for printing,
 libayatana-appindicator for tray icons, WPE WebKit 2.54+ for the WebView in
 native mode with webkit2gtk-4.1 as the GTK-mode fallback), with Fedora and
@@ -120,7 +157,10 @@ Debian package names. An app that ships `OpenMaui.Controls.Linux.Blazor`
 
 WPE on Fedora is not in the official repositories; the report and the launch-time
 check print the extra step: `sudo dnf copr enable philn/wpewebkit` before
-`sudo dnf install wpewebkit`. Debian/Ubuntu: `sudo apt install libwpewebkit-2.0-1`.
+`sudo dnf install wpewebkit`. Debian testing/sid: `sudo apt install libwpewebkit-2.0-1`.
+Debian 13 and Ubuntu: no WPE 2.54 package; the WebView falls back to WebKitGTK in
+GTK mode (`options.UseGtk = true`) and BlazorWebView is unavailable there unless
+WPE 2.54 is built or installed from elsewhere.
 
 `--host-deps-check` bakes a launch-time check into the AppImage: missing
 required libraries produce a dialog/stderr message with the exact
@@ -148,6 +188,8 @@ Launching the app itself requires a display; do not attempt in headless CI.
 | NU1900 warnings during publish | Unreachable NuGet feed during vulnerability lookup; harmless. |
 | Package downgrade NU1605 SkiaSharp | The app pins an older SkiaSharp than OpenMaui requires; align the app's pin with the OpenMaui packages. |
 | Icon generic in KDE launcher after FIRST install | Plasma caches icon lookups in-memory; shows after next login or `systemctl --user restart plasma-plasmashell.service`. First install of a new icon name only; not fixable by an installer. |
+| `rpmbuild not found` with `-f rpm` / `-f all` | `sudo dnf install rpm-build` (Fedora/RHEL) or `sudo apt install rpm` (Debian/Ubuntu); the `.deb` needs nothing extra. |
+| `Unknown --format` | Use `appimage`, `flatpak`, `deb`, `rpm`, `all`, or a comma-separated list. |
 | App crashes only inside AppImage, works from publish dir | Check the host-deps report; run `./MyApp.AppImage --appimage-extract` and diff against the publish dir. |
 
 ## Rules for AI assistants
@@ -156,4 +198,5 @@ Launching the app itself requires a display; do not attempt in headless CI.
 - Never call `appimagetool` or write AppRun/.desktop files manually for OpenMaui apps.
 - Never bundle GStreamer/webkit2gtk into the AppImage; they are host dependencies by design — use `--host-deps-check` instead.
 - Use `--app-id` (reverse-DNS) whenever `--metainfo` is used.
-- Treat a missing final `AppImage created successfully:` line as failure even if the exit code was swallowed by a shell pipeline.
+- Treat a missing final `AppImage created successfully:` (or, for deb/rpm, `Package created successfully:`) line as failure even if the exit code was swallowed by a shell pipeline.
+- For system packages use `-f deb`, `-f rpm` or `-f all`; never hand-write control files or spec files, and never add WPE WebKit as a hard dependency.

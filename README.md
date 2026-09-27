@@ -1,6 +1,6 @@
 # OpenMaui.AppImage
 
-Package .NET MAUI Linux apps as universal AppImages — one command from csproj to distributable.
+Package .NET MAUI Linux apps as universal AppImages, `.deb` and `.rpm` packages — one command from csproj to distributable.
 
 [![NuGet](https://img.shields.io/nuget/v/OpenMaui.AppImage)](https://www.nuget.org/packages/OpenMaui.AppImage)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/OpenMaui.AppImage)](https://www.nuget.org/packages/OpenMaui.AppImage)
@@ -22,6 +22,7 @@ AppImage is a universal Linux package format that allows you to distribute appli
 
 - **One-command packaging** with `--project` — the tool runs `dotnet publish` itself and packages the result
 - Package any .NET MAUI Linux app as an AppImage
+- **`.deb` and `.rpm` output** (`--format deb|rpm|all`) — installs to `/opt/<app-id>` with a `/usr/bin` launcher, desktop entry, hicolor icon and optional AppStream metainfo; host libraries become `Depends`/`Requires`/`Recommends` with per-distro package names. The `.deb` is written in managed code (no `dpkg-deb`, no root); the `.rpm` uses `rpmbuild`
 - **Package a `.deb` or existing AppDir** with `--appdir` — turn any FHS tree (Tauri, Electron, deb packages) into an AppImage, no `linuxdeploy` required
 - **appimagetool auto-fetch** — downloads and caches the official release when it isn't installed (`--no-fetch` to forbid network)
 - **Works in CI / containers without FUSE** — auto-detects a missing `/dev/fuse` and runs `appimagetool` in extract-and-run mode
@@ -103,14 +104,15 @@ Either way, the tool automatically detects:
 | `--input` | `-i` | Yes* | Path to published .NET app directory (*or use `--project`) |
 | `--project` | `-p` | Yes* | Path to a `.csproj` (or a directory containing one); the tool publishes it itself. Mutually exclusive with `--input`. |
 | `--rid` | | No | RID for `dotnet publish` with `--project` (default: host arch, e.g. `linux-x64`) |
-| `--output` | `-o` | With `--input` | Output AppImage file path (defaults to `<Name>.AppImage` with `--project`) |
+| `--output` | `-o` | With `--input` for AppImage/Flatpak | Output file path (defaults to `<Name>.AppImage`, or the conventional `.deb`/`.rpm` file name). With several formats it is an output **directory**. |
 | `--name` | `-n` | With `--input` | Application name (derived from the csproj with `--project`) |
 | `--executable` | `-e` | No | Main executable name (auto-detected if not specified) |
 | `--icon` | | No | Path to icon (auto-detected from MauiIcon if not specified) |
 | `--category` | `-c` | No | Desktop category (default: Utility) |
 | `--app-version` | | No | App version (default: 1.0.0, or the csproj `Version` with `--project`) |
 | `--comment` | | No | App description |
-| `--app-id` | | No | Reverse-DNS application id (e.g. `com.example.MyApp`), used for Flatpak and `--metainfo` |
+| `--app-id` | | No | Reverse-DNS application id (e.g. `com.example.MyApp`), used for Flatpak, `--metainfo`, and the `.deb`/`.rpm` install layout (default there: the csproj `ApplicationId`) |
+| `--format` | `-f` | No | `appimage` (default), `flatpak`, `deb`, `rpm`, `all` (= appimage + deb + rpm), or a comma-separated combination such as `deb,rpm`. See [System packages](#system-packages-deb-and-rpm). |
 | `--appdir` | | No | Treat `--input` as a pre-structured AppDir / FHS tree (e.g. a directory extracted from a `.deb`: `usr/bin`, `usr/lib`, `usr/share`) instead of a flat publish dir. See [Packaging a .deb or existing AppDir](#packaging-a-deb-or-existing-appdir). |
 | `--no-fuse` | | No | Always run `appimagetool` in extract-and-run mode instead of FUSE-mounting. FUSE is auto-detected by default; use this when FUSE is present but broken. |
 | `--no-fetch` | | No | Forbid network access: never auto-download `appimagetool` |
@@ -119,7 +121,12 @@ Either way, the tool automatically detects:
 | `--sign` | | No | GPG-sign the AppImage (appimagetool `--sign`) |
 | `--sign-key` | | No | GPG key id to sign with (implies `--sign`) |
 | `--metainfo` | | No | Generate AppStream metainfo.xml. See [AppStream metainfo](#appstream-metainfo). |
-| `--developer` | | No | Developer name for the AppStream metainfo |
+| `--developer` | | No | Developer name for the AppStream metainfo (also the default `.deb`/`.rpm` maintainer name) |
+| `--package-name` | | No | `.deb`/`.rpm` package and launcher name (default: lowercased app name, e.g. `shelldemo`) |
+| `--maintainer` | | No | `"Name <email>"` for the `.deb` `Maintainer` / `.rpm` `Packager` (default: `--developer`, else csproj `Authors`) |
+| `--license` | | No | SPDX license for the `.rpm` (default: csproj `PackageLicenseExpression`, else `LicenseRef-Proprietary`) |
+| `--homepage` | | No | Homepage for `.deb`/`.rpm` (default: csproj `PackageProjectUrl`) |
+| `--release` | | No | Package release / Debian revision (default: `1`) |
 
 ### Desktop Categories
 
@@ -189,12 +196,21 @@ tool scans the publish tree for OpenMaui feature assemblies and prints a concise
 **Host runtime dependencies** report — what the *target* machine needs:
 
 - `OpenMaui.Controls.Linux.dll` → required base set: **libX11**, **libwayland-client**,
-  **fontconfig**; plus optional, feature-gated libraries: **libcups** (printing),
-  **libayatana-appindicator3**/**libappindicator3** (tray icon), **webkit2gtk-4.1** (WebView)
+  **fontconfig**, **GTK 3** (`gtk_init_check` runs at startup); plus optional, feature-gated libraries: **libcups** (printing),
+  **libayatana-appindicator3**/**libappindicator3** (tray icon), **WPE WebKit 2.54+** (WebView, native mode),
+  **webkit2gtk-4.1** (WebView, GTK-mode fallback)
+- `OpenMaui.Controls.Linux.Blazor.dll` → makes **WPE WebKit 2.54+** required
 - `OpenMaui.Controls.Linux.MediaElement.dll` → **GStreamer 1.x** + base/good plugins
 - `OpenMaui.Controls.Linux.Maps.dll` → nothing native (network access only)
 
 Each entry lists the Fedora (`dnf`) and Debian/Ubuntu (`apt`) package names.
+
+WPE WebKit 2.54+ availability: Fedora ships none, it comes from the `philn/wpewebkit`
+COPR (`sudo dnf copr enable philn/wpewebkit && sudo dnf install wpewebkit`).
+Debian testing/sid: `sudo apt install libwpewebkit-2.0-1`. Debian 13 and Ubuntu have
+no 2.54 package: the WebView falls back to WebKitGTK in GTK mode
+(`options.UseGtk = true`) and BlazorWebView is unavailable there unless WPE 2.54 is
+built or installed from elsewhere.
 
 ### `--host-deps-check` — launch-time check
 
@@ -209,6 +225,43 @@ generated `AppRun`. At launch it probes the needed sonames via `ldconfig -p`:
 ```bash
 openmaui-appimage --project ./MyApp --host-deps-check
 ```
+
+## System packages (.deb and .rpm)
+
+```bash
+openmaui-appimage --project ./MyApp -f deb           # myapp_<ver>-1_amd64.deb
+openmaui-appimage --project ./MyApp -f rpm           # myapp-<ver>-1.x86_64.rpm
+openmaui-appimage --project ./MyApp -f all -o dist/  # AppImage + .deb + .rpm into dist/
+```
+
+The same publish output, metadata and dependency scan feed every format. Layout on the target:
+
+| Path | Content |
+|---|---|
+| `/opt/<app-id>/` | the self-contained publish output |
+| `/usr/bin/<package-name>` | launcher script (`exec /opt/<app-id>/<exe> "$@"`) |
+| `/usr/share/applications/<app-id>.desktop` | desktop entry (`Icon=<app-id>`, `StartupWMClass`) |
+| `/usr/share/icons/hicolor/{scalable,<n>x<n>}/apps/<app-id>.{svg,png}` | icon (SVG to `scalable`, PNG to its own size) |
+| `/usr/share/metainfo/<app-id>.metainfo.xml` | with `--metainfo` |
+
+Files are owned by `root:root`, directories and executables are `0755`, everything else
+(including `.so` libraries) `0644`. No maintainer scripts: desktop-database and icon-cache
+refreshes come from the distros' own triggers.
+
+**Dependencies.** The .NET runtime prerequisites (glibc, libstdc++, zlib, OpenSSL, ICU)
+and the scanner's required libraries become `Depends:` (deb) / `Requires:` (rpm);
+feature-gated libraries become `Recommends:`. WPE WebKit is only ever a
+version-qualified `Recommends` (`libwpewebkit-2.0-1 (>= 2.54)`, `wpewebkit >= 2.54`),
+even for BlazorWebView apps, so the package installs on stock Fedora, Debian 13 and
+Ubuntu; the packaging output and the rpm description carry the install notes.
+The rpm sets `AutoReqProv: no` so the bundled `.so` files are not exported as system-wide
+provides, and disables stripping/debuginfo so the .NET payload is shipped untouched.
+
+**Tooling.** The `.deb` is written in managed code (ar + `control.tar.gz` + `data.tar.gz`
+with `md5sums`), so it builds on any distro without `dpkg-deb` or root. The `.rpm` needs
+`rpmbuild` (run with a private `_topdir`, nothing lands in `~/rpmbuild`):
+`sudo dnf install rpm-build` on Fedora, `sudo apt install rpm` on Debian/Ubuntu.
+`--appdir` is AppImage-only.
 
 ## Self-updating AppImages (zsync)
 
